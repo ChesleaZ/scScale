@@ -10,14 +10,14 @@ Install the development version from GitHub:
 
 ```r
 install.packages("remotes")
-remotes::install_github("ChesleaZ/Scaling-law-summer-version-")
+remotes::install_github("ChelseaZ/scScale")
 ```
 
 You can also install with `pak`:
 
 ```r
 install.packages("pak")
-pak::pak("ChesleaZ/Scaling-law-summer-version-")
+pak::pak("ChelseaZ/scScale")
 ```
 
 ## Quick Start
