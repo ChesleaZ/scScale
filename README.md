@@ -1,25 +1,101 @@
-# RMT_sc
+# scScale
 
-Random matrix theory experiments for single-cell covariance spectra.
+`scScale` is an R package for single-cell scaling-law analyses. It includes
+median Marchenko-Pastur noise calibration, BBP spike inversion, spectral mutual
+information utilities, and batch-effect scaling-law fits.
 
-## Current Layout
+## Installation
 
-- `data/Jurkat/`: Jurkat 10x matrix input.
-- `data/K562/`: K562 10x matrix input.
-- `scripts/exploration/`: one simple bucket for exploratory scripts, including the MP analysis pipeline work.
-- `outputs/exploration/`: exploratory CSVs and plots, kept for reference.
+Install the development version from GitHub:
 
-## Current Pipeline Direction
-
-The active analysis is exploratory MP work, moving toward mixture models as the core method:
-
-1. detect spike eigenvalues,
-2. estimate residual noise variance from non-spike eigenvalues,
-3. compute the MP law using known aspect ratio and residual variance,
-4. test whether one exact MP or a mixture of exact MPs explains the residual bulk.
-
-Start with:
-
-```sh
-Rscript scripts/exploration/simulated_spiked_mp_pipeline.R
+```r
+install.packages("remotes")
+remotes::install_github("ChesleaZ/Scaling-law-summer-version-")
 ```
+
+You can also install with `pak`:
+
+```r
+install.packages("pak")
+pak::pak("ChesleaZ/Scaling-law-summer-version-")
+```
+
+## Quick Start
+
+```r
+library(scScale)
+
+ref_ev <- find_eigenvalues(ref_counts, n_features = 2000)
+cur_ev <- find_eigenvalues(cur_counts, n_features = 2000)
+
+ref_noise <- fit_noise(ref_ev)
+ref <- fit_spikes(ref_ev, noise = ref_noise, r = 5)
+cur <- fit_spikes(cur_ev, noise = ref_noise, r = 5)
+
+mi_theory(cur, ref, side = "cells", r = 5)$mi
+```
+
+If eigenvalues are already precomputed:
+
+```r
+fit <- mi_theory_from_eigenvalues(
+  cur_eigenvalues = cur_mu,
+  ref_eigenvalues = ref_mu,
+  n_cur = 600,
+  p_cur = 300,
+  side = "cells",
+  r = 5
+)
+```
+
+Batch-effect scaling fits can be run from replicate summaries:
+
+```r
+summary_df <- data.frame(
+  m_batch = c(2, 3, 5, 8, 12),
+  mean_I_bio_norm = c(0.12, 0.15, 0.18, 0.20, 0.215)
+)
+
+fit_batch_effect_scaling(summary_df, law = "batch_number", min_points = 4)
+```
+
+## Command Line
+
+From precomputed eigenvalues:
+
+```bash
+Rscript inst/scripts/run_from_eigenvalues.R \
+  --cur-eigenvalues=cur.csv \
+  --ref-eigenvalues=ref.csv \
+  --n-cur=600 \
+  --p-cur=300 \
+  --side=cells \
+  --out-dir=outputs/scscale_spectral_mi
+```
+
+From count CSVs:
+
+```bash
+Rscript inst/scripts/run_from_eigenvalues.R \
+  --cur-counts=cur_counts.csv \
+  --ref-counts=ref_counts.csv \
+  --n-features=2000 \
+  --transform=pearson \
+  --side=cells \
+  --out-dir=outputs/scscale_spectral_mi
+```
+
+## Tutorials
+
+Rendered tutorials are in [`docs/`](docs/):
+
+- [Tutorial index](docs/scScale-tutorial.html)
+- [Cell-number scaling law](docs/cell-number-scaling-law.html)
+- [UMI scaling law](docs/umi-scaling-law.html)
+- [Batch-number scaling law](docs/batch-number-scaling-law.html)
+
+The GitHub Pages website entry point is [`docs/index.html`](docs/index.html).
+When Pages is enabled for this repository using the `main` branch and `/docs`
+folder, the tutorials will be available at:
+
+<https://chesleaz.github.io/Scaling-law-summer-version-/>

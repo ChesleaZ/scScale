@@ -1,8 +1,0 @@
-.venv/
-models/
-sources/
-*.log
-*.out
-*.err
-__pycache__/
-.ipynb_checkpoints/
