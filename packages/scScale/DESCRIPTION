@@ -1,0 +1,20 @@
+Package: scScale
+Title: Single-Cell Scaling Law Utilities
+Version: 0.0.1
+Authors@R:
+    person("Jingyuan", "Hu", role = c("aut", "cre"), email = "jingyuanhu@example.com")
+Author: Jingyuan Hu [aut, cre]
+Maintainer: Jingyuan Hu <jingyuanhu@example.com>
+Description: Single-cell scaling law utilities for spectral mutual
+    information, median Marchenko-Pastur noise calibration, BBP spike
+    inversion, and batch-effect scaling analyses.
+License: MIT + file LICENSE
+Encoding: UTF-8
+Suggests:
+    irlba,
+    knitr,
+    Matrix,
+    rmarkdown,
+    SeuratObject
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.2

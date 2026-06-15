@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Batch number scaling law</title>
+<style>body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;line-height:1.55;max-width:920px;margin:32px auto;padding:0 20px;color:#202124}pre{background:#f6f8fa;padding:12px;overflow:auto;border-radius:6px}code{font-family:Menlo,Consolas,monospace}img{max-width:100%;height:auto}table{border-collapse:collapse}td,th{border:1px solid #ddd;padding:4px 8px}blockquote{color:#555;border-left:4px solid #ddd;margin-left:0;padding-left:12px}h1{margin-bottom:0.4em}</style>
+</head>
+<body>
+<h1>Batch number scaling law</h1>
+<h2>Goal</h2>
+<p>This tutorial shows the batch-effect scaling law added from the GitHub BMMC
+CITE-seq script:</p>
+<p><code>I = I_inf - C * log(1 - A / m)</code></p>
+<p>where <code>m</code> is the number of batches at fixed total cells.</p>
+<p>The original script used paired RNA and ADT modalities. This lightweight
+tutorial starts from a real Jurkat 10x RNA count block and splits its HVGs into
+two disjoint gene views. That gives us paired cell-side matrices without
+shipping a large multimodal object.</p>
+<h2>Load real Jurkat counts and make two views</h2>
+<p><code>batch_effect_mi()</code> estimates biological information from two feature-by-cell
+matrices by computing cell-side subspaces and squared canonical correlations.</p>
+<pre><code class="language-r">counts_file &lt;- file.path(
+  &quot;..&quot;, &quot;..&quot;, &quot;..&quot;,
+  &quot;outputs&quot;, &quot;exploration&quot;, &quot;jurkat_glmpca_gaussian_snr_by_n&quot;,
+  &quot;jurkat_glmpca_counts_hvg.csv&quot;
+)
+
+counts &lt;- as.matrix(read.csv(counts_file, row.names = 1, check.names = FALSE))
+dim(counts)
+#&gt; [1]  400 5000
+
+view_a &lt;- counts[seq_len(200), , drop = FALSE]
+view_b &lt;- counts[201:400, , drop = FALSE]
+</code></pre>
+<pre><code class="language-r">cells_demo &lt;- sample(colnames(counts), 600)
+
+bio &lt;- batch_effect_mi(
+  view_a[, cells_demo, drop = FALSE],
+  view_b[, cells_demo, drop = FALSE],
+  r_x = 5,
+  r_y = 5,
+  transform_x = &quot;log1p&quot;,
+  transform_y = &quot;log1p&quot;
+)
+
+bio[c(&quot;mi&quot;, &quot;mi_norm&quot;, &quot;r_eff&quot;)]
+#&gt; $mi
+#&gt; [1] 4.913267
+#&gt; 
+#&gt; $mi_norm
+#&gt; [1] 0.9826535
+#&gt; 
+#&gt; $r_eff
+#&gt; [1] 5
+</code></pre>
+<h2>Sampling cells by batch</h2>
+<p><code>sample_batch_cells()</code> samples a balanced number of cells from each selected
+batch. The Jurkat block does not come with experimental batch labels, so we
+create pseudo-batches by ordering cells by UMI depth and cutting them into
+equally sized groups. Real analyses should use an experimental batch or donor
+column.</p>
+<pre><code class="language-r">cell_depth &lt;- colSums(counts)
+batch_id &lt;- cut(
+  rank(cell_depth, ties.method = &quot;first&quot;),
+  breaks = 12,
+  labels = paste0(&quot;depth_batch_&quot;, seq_len(12))
+)
+
+meta &lt;- data.frame(
+  batch = as.character(batch_id),
+  umi_in_hvg_block = cell_depth,
+  row.names = colnames(counts)
+)
+
+sampled &lt;- sample_batch_cells(
+  meta = meta,
+  batch_col = &quot;batch&quot;,
+  m_batch = 4,
+  cells_per_batch = 80,
+  seed = 1
+)
+
+head(sampled$cells)
+#&gt; [1] &quot;cell_100214&quot; &quot;cell_86975&quot;  &quot;cell_58201&quot;  &quot;cell_103076&quot; &quot;cell_26700&quot; 
+#&gt; [6] &quot;cell_88474&quot;
+sampled$batches
+#&gt; [1] &quot;depth_batch_6&quot;  &quot;depth_batch_12&quot; &quot;depth_batch_4&quot;  &quot;depth_batch_1&quot;
+</code></pre>
+<h2>Fit the batch-number law</h2>
+<p>For each design point below, we sample cells from a fixed total of 480 cells
+and vary the number of batches.</p>
+<pre><code class="language-r">run_design &lt;- function(m_batch, rep_id, n_total = 480) {
+  cells_per_batch &lt;- as.integer(n_total / m_batch)
+  sampled &lt;- sample_batch_cells(
+    meta = meta,
+    batch_col = &quot;batch&quot;,
+    m_batch = m_batch,
+    cells_per_batch = cells_per_batch,
+    seed = 1000 + 100 * rep_id + m_batch
+  )
+  bio &lt;- batch_effect_mi(
+    view_a[, sampled$cells, drop = FALSE],
+    view_b[, sampled$cells, drop = FALSE],
+    r_x = 5,
+    r_y = 5,
+    transform_x = &quot;log1p&quot;,
+    transform_y = &quot;log1p&quot;
+  )
+  data.frame(
+    experiment = &quot;fixed_n_vary_m&quot;,
+    rep = rep_id,
+    m_batch = m_batch,
+    cells_per_batch = cells_per_batch,
+    n_cells = length(sampled$cells),
+    I_bio = bio$mi,
+    I_bio_norm = bio$mi_norm
+  )
+}
+
+replicate_results &lt;- do.call(
+  rbind,
+  lapply(seq_len(3), function(rep_id) {
+    do.call(rbind, lapply(c(2, 3, 4, 6, 8, 12), run_design, rep_id = rep_id))
+  })
+)
+
+summary_df &lt;- summarize_batch_effect_results(replicate_results)
+summary_df
+#&gt;       experiment m_batch cells_per_batch n_cells mean_I_bio   sd_I_bio
+#&gt; 1 fixed_n_vary_m       2             240     480   4.448235 0.25618292
+#&gt; 2 fixed_n_vary_m       3             160     480   4.593037 0.42896768
+#&gt; 3 fixed_n_vary_m       4             120     480   4.668589 0.30094731
+#&gt; 4 fixed_n_vary_m       6              80     480   4.975604 0.22156321
+#&gt; 5 fixed_n_vary_m       8              60     480   4.873855 0.08152891
+#&gt; 6 fixed_n_vary_m      12              40     480   4.959085 0.10672961
+#&gt;     se_I_bio mean_I_bio_norm sd_I_bio_norm se_I_bio_norm n_rep_observed
+#&gt; 1 0.14790728       0.8896471    0.05123658   0.029581456              3
+#&gt; 2 0.24766460       0.9186073    0.08579354   0.049532921              3
+#&gt; 3 0.17375201       0.9337178    0.06018946   0.034750402              3
+#&gt; 4 0.12791958       0.9951208    0.04431264   0.025583916              3
+#&gt; 5 0.04707074       0.9747710    0.01630578   0.009414148              3
+#&gt; 6 0.06162037       0.9918171    0.02134592   0.012324074              3
+</code></pre>
+<pre><code class="language-r">batch_fit &lt;- suppressWarnings(
+  fit_batch_scaling(
+    summary_df,
+    law = &quot;batch_number&quot;,
+    target_col = &quot;mean_I_bio_norm&quot;,
+    min_points = 5
+  )
+)
+
+coef(batch_fit)
+#&gt;      I_inf          C          A 
+#&gt;  1.0273123  0.2160777 -1.8437698
+summary(batch_fit)
+#&gt;    type        model   x_col y_col n_points   ok message    I_inf         C
+#&gt; 1 batch batch_number m_batch I_fit        6 TRUE      ok 1.027312 0.2160777
+#&gt;          A        R2       RMSE         MAE
+#&gt; 1 -1.84377 0.9012202 0.01236638 0.009736167
+predict(batch_fit, data.frame(m_batch = c(16, 24, 32)))
+#&gt; [1] 1.003746 1.011319 1.015208
+</code></pre>
+<h2>Plot</h2>
+<pre><code class="language-r">plot(batch_fit, xlab = &quot;Number of pseudo-batches&quot;, ylab = &quot;Mean normalized biological information&quot;)
+</code></pre>
+<p><img src="figure/batch-number-plot-batch-law-1.png" alt="plot of chunk plot-batch-law" /></p>
+<h2>Cells per batch variant</h2>
+<p>The companion law uses fixed batch number and varies cells per batch:</p>
+<p><code>I = I_inf - C * log(1 + A / s)</code></p>
+<p>Use the same function with <code>law = &quot;cells_per_batch&quot;</code> and a
+<code>cells_per_batch</code> column in the summary table.</p>
+
+</body>
+</html>
+

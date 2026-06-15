@@ -1,0 +1,108 @@
+---
+title: "Cell number scaling law"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    theme: readable
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.width = 6,
+  fig.height = 4,
+  fig.path = "figure/cell-number-"
+)
+
+local_lib <- normalizePath(file.path("..", "..", "..", ".rlib"), mustWork = FALSE)
+if (dir.exists(local_lib)) .libPaths(c(local_lib, .libPaths()))
+library(scScale)
+set.seed(11)
+```
+
+## Goal
+
+This example asks how a spectral signal estimate changes as the number of cells
+increases. It starts from a real Jurkat 10x single-cell count block already
+sampled in this repository: 400 highly variable genes by 5,000 cells, derived
+from `data/Jurkat/sample_filtered_feature_bc_matrix`.
+
+The workflow is:
+
+1. load the real feature-by-cell count matrix;
+2. sample different numbers of cells;
+3. call `fit_cell_scaling()` to fit spectra across the grid;
+4. inspect `coef()`, `summary()`, and `plot()`;
+5. use `predict()` to extrapolate to larger cell counts.
+
+## Load real Jurkat counts
+
+```{r load-counts}
+counts_file <- file.path(
+  "..", "..", "..",
+  "outputs", "exploration", "jurkat_glmpca_gaussian_snr_by_n",
+  "jurkat_glmpca_counts_hvg.csv"
+)
+
+counts <- as.matrix(read.csv(counts_file, row.names = 1, check.names = FALSE))
+dim(counts)
+summary(colSums(counts))
+```
+
+The full source dataset contains many more cells; this tutorial uses a compact
+HVG block so it renders quickly.
+
+```{r source-summary}
+sample_summary <- read.csv(file.path(
+  "..", "..", "..",
+  "outputs", "exploration", "jurkat_glmpca_gaussian_snr_by_n",
+  "jurkat_glmpca_sample_summary.csv"
+))
+sample_summary[, c("dataset", "n_total_cells", "sampled_cells", "n_genes_used", "mean_umi_per_cell")]
+```
+
+## Fit the cell-number scaling object
+
+`fit_cell_scaling()` computes the reference spectrum from the full matrix,
+subsamples cells across `cell_grid`, computes theoretical MI with `mi_theory()`,
+and fits a saturating curve to normalized MI.
+
+```{r cell-fit}
+cell_fit <- fit_cell_scaling(
+  counts,
+  cell_grid = c(250, 500, 1000, 2000, 3500, 5000),
+  n_features = 300,
+  transform = "log1p",
+  min_cells = 10,
+  r = 8,
+  R = 3,
+  p_sim = 100,
+  seed = 1
+)
+
+cell_fit$data
+```
+
+## Inspect and extrapolate
+
+The fitted object supports the usual R-style methods.
+
+```{r inspect-cell-fit}
+coef(cell_fit)
+summary(cell_fit)
+predict(cell_fit, data.frame(n_cells = c(7500, 10000, 20000)))
+```
+
+## Plot
+
+```{r plot-cell-law}
+plot(cell_fit, xlab = "Cells sampled", ylab = "Theoretical MI / retained rank")
+```
+
+## Adapt to real data
+
+Replace `counts` with another real feature-by-cell matrix or Seurat object
+accepted by `find_eigenvalues()`. Keep the same cell grid loop, then choose the
+response that best matches the biological question.

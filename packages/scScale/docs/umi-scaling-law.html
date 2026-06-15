@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UMI scaling law</title>
+<style>body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;line-height:1.55;max-width:920px;margin:32px auto;padding:0 20px;color:#202124}pre{background:#f6f8fa;padding:12px;overflow:auto;border-radius:6px}code{font-family:Menlo,Consolas,monospace}img{max-width:100%;height:auto}table{border-collapse:collapse}td,th{border:1px solid #ddd;padding:4px 8px}blockquote{color:#555;border-left:4px solid #ddd;margin-left:0;padding-left:12px}h1{margin-bottom:0.4em}</style>
+</head>
+<body>
+<h1>UMI scaling law</h1>
+<h2>Goal</h2>
+<p>This example asks how a spectral signal estimate changes with sequencing depth,
+represented here as total UMI depth. It starts from the same real Jurkat 10x
+HVG count block used in the cell-number tutorial.</p>
+<p>The workflow is:</p>
+<ol>
+<li>load a real feature-by-cell count matrix;</li>
+<li>depth-subsample UMIs at several fractions;</li>
+<li>call <code>fit_umi_scaling()</code> to fit spectra across the depth grid;</li>
+<li>inspect <code>coef()</code>, <code>summary()</code>, and <code>plot()</code>;</li>
+<li>use <code>predict()</code> to extrapolate to higher depth.</li>
+</ol>
+<h2>Load real Jurkat counts</h2>
+<pre><code class="language-r">counts_file &lt;- file.path(
+  &quot;..&quot;, &quot;..&quot;, &quot;..&quot;,
+  &quot;outputs&quot;, &quot;exploration&quot;, &quot;jurkat_glmpca_gaussian_snr_by_n&quot;,
+  &quot;jurkat_glmpca_counts_hvg.csv&quot;
+)
+
+counts_full &lt;- as.matrix(read.csv(counts_file, row.names = 1, check.names = FALSE))
+dim(counts_full)
+#&gt; [1]  400 5000
+summary(colSums(counts_full))
+#&gt;    Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+#&gt;      77    1314    1944    2294    2861   21442
+</code></pre>
+<p>To keep rendering fast, use 3,000 cells from the 5,000-cell tutorial block.</p>
+<pre><code class="language-r">cells_use &lt;- sample(colnames(counts_full), 3000)
+counts_base &lt;- counts_full[, cells_use, drop = FALSE]
+summary(colSums(counts_base))
+#&gt;    Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+#&gt;      82    1306    1943    2317    2872   21442
+</code></pre>
+<h2>Fit the UMI-depth scaling object</h2>
+<p><code>fit_umi_scaling()</code> binomially thins counts to each UMI fraction, compares each
+downsampled spectrum to the full-depth reference with <code>mi_theory()</code>, and fits a
+saturating curve to normalized MI.</p>
+<pre><code class="language-r">umi_fit &lt;- fit_umi_scaling(
+  counts_base,
+  umi_grid = c(0.02, 0.05, 0.1, 0.2, 0.4, 0.7, 1.0),
+  n_cells = ncol(counts_base),
+  n_features = 300,
+  transform = &quot;log1p&quot;,
+  min_cells = 10,
+  r = 8,
+  R = 3,
+  p_sim = 100,
+  seed = 1
+)
+
+umi_fit$data
+#&gt;   mean_umi_per_cell   mean_mi sd_mi se_mi mean_mi_norm sd_mi_norm se_mi_norm
+#&gt; 1           46.4670  3.633146    NA    NA    0.4541432         NA         NA
+#&gt; 2          116.0313  5.032449    NA    NA    0.6290561         NA         NA
+#&gt; 3          231.6250  6.324499    NA    NA    0.7905623         NA         NA
+#&gt; 4          463.4467  7.548752    NA    NA    0.9435940         NA         NA
+#&gt; 5          927.0967  8.717384    NA    NA    1.0896730         NA         NA
+#&gt; 6         1622.5780  9.595680    NA    NA    1.1994600         NA         NA
+#&gt; 7         2317.3497 10.092073    NA    NA    1.2615092         NA         NA
+#&gt;   mean_lambda1_over_mp_edge mean_n_spikes n_rep_observed    I_pred       resid
+#&gt; 1                  9.938554            19              1 0.2872285  0.16691469
+#&gt; 2                 20.611851            17              1 0.5880582  0.04099792
+#&gt; 3                 35.587023            18              1 0.8726643 -0.08210191
+#&gt; 4                 60.580374            21              1 1.0787666 -0.13517265
+#&gt; 5                 99.200838            27              1 1.1388246 -0.04915156
+#&gt; 6                149.957418            34              1 1.1423139  0.05714608
+#&gt; 7                191.296562            40              1 1.1423597  0.11914948
+</code></pre>
+<h2>Inspect and extrapolate</h2>
+<pre><code class="language-r">coef(umi_fit)
+#&gt;       I_inf           k 
+#&gt; 1.142360293 0.006232299
+summary(umi_fit)
+#&gt;   type      model             x_col        y_col n_points   ok message   I_inf
+#&gt; 1  umi saturating mean_umi_per_cell mean_mi_norm        7 TRUE      ok 1.14236
+#&gt;             k        R2     RMSE        MAE
+#&gt; 1 0.006232299 0.8626101 0.103117 0.09294776
+predict(umi_fit, data.frame(mean_umi_per_cell = c(2500, 3500, 5000)))
+#&gt; [1] 1.14236 1.14236 1.14236
+</code></pre>
+<h2>Plot</h2>
+<pre><code class="language-r">plot(umi_fit, xlab = &quot;Mean UMI per cell in HVG block&quot;, ylab = &quot;Theoretical MI / retained rank&quot;)
+</code></pre>
+<p><img src="figure/umi-plot-umi-law-1.png" alt="plot of chunk plot-umi-law" /></p>
+<h2>Adapt to real data</h2>
+<p>Use another real count matrix as <code>counts_full</code>, repeat the binomial thinning
+across fractions and replicates, and store the response you want to model. The
+spectral estimation pieces stay the same.</p>
+
+</body>
+</html>
+

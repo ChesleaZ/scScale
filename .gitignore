@@ -1,0 +1,23 @@
+.DS_Store
+.Rhistory
+.RData
+.Rproj.user/
+.rlib/
+.codex_remote/
+__pycache__/
+*.py[cod]
+
+# Local data and generated outputs are intentionally not committed.
+data/
+outputs/
+reports/
+jingyuan/
+
+# R build/check artifacts.
+*.tar.gz
+*.Rcheck/
+
+# Python/virtual environment artifacts.
+.venv/
+venv/
+env/
