@@ -20,6 +20,18 @@ local_lib <- normalizePath(file.path("..", "..", "..", ".rlib"), mustWork = FALS
 if (dir.exists(local_lib)) .libPaths(c(local_lib, .libPaths()))
 library(scScale)
 set.seed(17)
+
+make_tutorial_counts <- function(seed = 11, n_genes = 400, n_cells = 5000, n_factors = 6) {
+  set.seed(seed)
+  gene_loadings <- matrix(rnorm(n_genes * n_factors, sd = 0.45), nrow = n_genes)
+  cell_scores <- matrix(rnorm(n_cells * n_factors), nrow = n_cells)
+  gene_baseline <- rnorm(n_genes, mean = log(1.5), sd = 0.35)
+  log_mu <- gene_baseline + gene_loadings %*% t(cell_scores) / sqrt(n_factors)
+  counts <- matrix(rpois(length(log_mu), lambda = pmin(exp(log_mu), 80)), nrow = n_genes)
+  rownames(counts) <- paste0("gene_", seq_len(n_genes))
+  colnames(counts) <- paste0("cell_", seq_len(n_cells))
+  counts
+}
 ```
 
 ## Goal
@@ -32,9 +44,10 @@ CITE-seq script:
 where `m` is the number of batches at fixed total cells.
 
 The original script used paired RNA and ADT modalities. This lightweight
-tutorial starts from a real Jurkat 10x RNA count block and splits its HVGs into
-two disjoint gene views. That gives us paired cell-side matrices without
-shipping a large multimodal object.
+tutorial starts from the same compact count block as the other tutorials and
+splits its features into two disjoint gene views. If the repository-local Jurkat
+10x block is available, the tutorial uses it; otherwise it generates a small
+structured count matrix so the page remains self-contained.
 
 ## Load real Jurkat counts and make two views
 
@@ -48,7 +61,15 @@ counts_file <- file.path(
   "jurkat_glmpca_counts_hvg.csv"
 )
 
-counts <- as.matrix(read.csv(counts_file, row.names = 1, check.names = FALSE))
+if (file.exists(counts_file)) {
+  counts <- as.matrix(read.csv(counts_file, row.names = 1, check.names = FALSE))
+  counts_source <- "Jurkat 10x HVG block"
+} else {
+  counts <- make_tutorial_counts(seed = 11)
+  counts_source <- "synthetic structured tutorial block"
+}
+
+counts_source
 dim(counts)
 
 view_a <- counts[seq_len(200), , drop = FALSE]
@@ -68,6 +89,16 @@ bio <- batch_effect_mi(
 )
 
 bio[c("mi", "mi_norm", "r_eff")]
+```
+
+The raw MI can be mapped to a bounded average-overlap scale:
+
+```{r normalized-overlap-helper}
+normalized_overlap <- function(mi, r) {
+  1 - exp(-2 * mi / pmax(r, 1))
+}
+
+normalized_overlap(bio$mi, bio$r_eff)
 ```
 
 ## Sampling cells by batch
@@ -134,7 +165,9 @@ run_design <- function(m_batch, rep_id, n_total = 480) {
     cells_per_batch = cells_per_batch,
     n_cells = length(sampled$cells),
     I_bio = bio$mi,
-    I_bio_norm = bio$mi_norm
+    I_bio_norm = bio$mi_norm,
+    r_eff = bio$r_eff,
+    I_bio_overlap = normalized_overlap(bio$mi, bio$r_eff)
   )
 }
 
@@ -146,6 +179,19 @@ replicate_results <- do.call(
 )
 
 summary_df <- summarize_batch_effect_results(replicate_results)
+overlap_summary <- aggregate(
+  cbind(r_eff, I_bio_overlap) ~ experiment + m_batch + cells_per_batch + n_cells,
+  data = replicate_results,
+  FUN = mean
+)
+names(overlap_summary)[names(overlap_summary) == "r_eff"] <- "mean_r_eff"
+names(overlap_summary)[names(overlap_summary) == "I_bio_overlap"] <- "mean_I_bio_overlap"
+summary_df <- merge(
+  summary_df,
+  overlap_summary,
+  by = c("experiment", "m_batch", "cells_per_batch", "n_cells"),
+  sort = FALSE
+)
 summary_df
 ```
 
@@ -164,10 +210,34 @@ summary(batch_fit)
 predict(batch_fit, data.frame(m_batch = c(16, 24, 32)))
 ```
 
-## Plot
+The same batch-number law can also be fit to the bounded normalized-overlap
+score.
+
+```{r fit-batch-overlap-law}
+batch_overlap_fit <- suppressWarnings(
+  fit_batch_scaling(
+    summary_df,
+    law = "batch_number",
+    target_col = "mean_I_bio_overlap",
+    min_points = 5
+  )
+)
+
+coef(batch_overlap_fit)
+summary(batch_overlap_fit)
+predict(batch_overlap_fit, data.frame(m_batch = c(16, 24, 32)))
+```
+
+## Plot biological information
 
 ```{r plot-batch-law}
 plot(batch_fit, xlab = "Number of pseudo-batches", ylab = "Mean normalized biological information")
+```
+
+## Plot empirical overlap
+
+```{r plot-batch-overlap-law}
+plot(batch_overlap_fit, xlab = "Number of pseudo-batches", ylab = "Empirical normalized overlap")
 ```
 
 ## Cells per batch variant

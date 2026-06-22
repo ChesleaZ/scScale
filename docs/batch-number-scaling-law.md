@@ -1,202 +1,244 @@
----
-title: "Batch number scaling law"
-output:
-  html_document:
-    toc: true
-    toc_depth: 2
-    theme: readable
----
-
-
-
 ## Goal
 
-This tutorial shows the batch-effect scaling law added from the GitHub BMMC
-CITE-seq script:
+This tutorial shows the batch-effect scaling law added from the GitHub
+BMMC CITE-seq script:
 
 `I = I_inf - C * log(1 - A / m)`
 
 where `m` is the number of batches at fixed total cells.
 
 The original script used paired RNA and ADT modalities. This lightweight
-tutorial starts from a real Jurkat 10x RNA count block and splits its HVGs into
-two disjoint gene views. That gives us paired cell-side matrices without
-shipping a large multimodal object.
+tutorial starts from the same compact count block as the other tutorials
+and splits its features into two disjoint gene views. If the
+repository-local Jurkat 10x block is available, the tutorial uses it;
+otherwise it generates a small structured count matrix so the page
+remains self-contained.
 
 ## Load real Jurkat counts and make two views
 
-`batch_effect_mi()` estimates biological information from two feature-by-cell
-matrices by computing cell-side subspaces and squared canonical correlations.
+`batch_effect_mi()` estimates biological information from two
+feature-by-cell matrices by computing cell-side subspaces and squared
+canonical correlations.
 
+    counts_file <- file.path(
+      "..", "..", "..",
+      "outputs", "exploration", "jurkat_glmpca_gaussian_snr_by_n",
+      "jurkat_glmpca_counts_hvg.csv"
+    )
 
-``` r
-counts_file <- file.path(
-  "..", "..", "..",
-  "outputs", "exploration", "jurkat_glmpca_gaussian_snr_by_n",
-  "jurkat_glmpca_counts_hvg.csv"
-)
+    if (file.exists(counts_file)) {
+      counts <- as.matrix(read.csv(counts_file, row.names = 1, check.names = FALSE))
+      counts_source <- "Jurkat 10x HVG block"
+    } else {
+      counts <- make_tutorial_counts(seed = 11)
+      counts_source <- "synthetic structured tutorial block"
+    }
 
-counts <- as.matrix(read.csv(counts_file, row.names = 1, check.names = FALSE))
-dim(counts)
-#> [1]  400 5000
+    counts_source
+    #> [1] "synthetic structured tutorial block"
+    dim(counts)
+    #> [1]  400 5000
 
-view_a <- counts[seq_len(200), , drop = FALSE]
-view_b <- counts[201:400, , drop = FALSE]
-```
+    view_a <- counts[seq_len(200), , drop = FALSE]
+    view_b <- counts[201:400, , drop = FALSE]
 
+    cells_demo <- sample(colnames(counts), 600)
 
-``` r
-cells_demo <- sample(colnames(counts), 600)
+    bio <- batch_effect_mi(
+      view_a[, cells_demo, drop = FALSE],
+      view_b[, cells_demo, drop = FALSE],
+      r_x = 5,
+      r_y = 5,
+      transform_x = "log1p",
+      transform_y = "log1p"
+    )
 
-bio <- batch_effect_mi(
-  view_a[, cells_demo, drop = FALSE],
-  view_b[, cells_demo, drop = FALSE],
-  r_x = 5,
-  r_y = 5,
-  transform_x = "log1p",
-  transform_y = "log1p"
-)
+    bio[c("mi", "mi_norm", "r_eff")]
+    #> $mi
+    #> [1] 3.558273
+    #> 
+    #> $mi_norm
+    #> [1] 0.7116547
+    #> 
+    #> $r_eff
+    #> [1] 5
 
-bio[c("mi", "mi_norm", "r_eff")]
-#> $mi
-#> [1] 4.913267
-#> 
-#> $mi_norm
-#> [1] 0.9826535
-#> 
-#> $r_eff
-#> [1] 5
-```
+The raw MI can be mapped to a bounded average-overlap scale:
+
+    normalized_overlap <- function(mi, r) {
+      1 - exp(-2 * mi / pmax(r, 1))
+    }
+
+    normalized_overlap(bio$mi, bio$r_eff)
+    #> [1] 0.7590846
 
 ## Sampling cells by batch
 
-`sample_batch_cells()` samples a balanced number of cells from each selected
-batch. The Jurkat block does not come with experimental batch labels, so we
-create pseudo-batches by ordering cells by UMI depth and cutting them into
-equally sized groups. Real analyses should use an experimental batch or donor
-column.
+`sample_batch_cells()` samples a balanced number of cells from each
+selected batch. The Jurkat block does not come with experimental batch
+labels, so we create pseudo-batches by ordering cells by UMI depth and
+cutting them into equally sized groups. Real analyses should use an
+experimental batch or donor column.
 
+    cell_depth <- colSums(counts)
+    batch_id <- cut(
+      rank(cell_depth, ties.method = "first"),
+      breaks = 12,
+      labels = paste0("depth_batch_", seq_len(12))
+    )
 
-``` r
-cell_depth <- colSums(counts)
-batch_id <- cut(
-  rank(cell_depth, ties.method = "first"),
-  breaks = 12,
-  labels = paste0("depth_batch_", seq_len(12))
-)
+    meta <- data.frame(
+      batch = as.character(batch_id),
+      umi_in_hvg_block = cell_depth,
+      row.names = colnames(counts)
+    )
 
-meta <- data.frame(
-  batch = as.character(batch_id),
-  umi_in_hvg_block = cell_depth,
-  row.names = colnames(counts)
-)
+    sampled <- sample_batch_cells(
+      meta = meta,
+      batch_col = "batch",
+      m_batch = 4,
+      cells_per_batch = 80,
+      seed = 1
+    )
 
-sampled <- sample_batch_cells(
-  meta = meta,
-  batch_col = "batch",
-  m_batch = 4,
-  cells_per_batch = 80,
-  seed = 1
-)
-
-head(sampled$cells)
-#> [1] "cell_100214" "cell_86975"  "cell_58201"  "cell_103076" "cell_26700" 
-#> [6] "cell_88474"
-sampled$batches
-#> [1] "depth_batch_6"  "depth_batch_12" "depth_batch_4"  "depth_batch_1"
-```
+    head(sampled$cells)
+    #> [1] "cell_3733" "cell_3359" "cell_2231" "cell_3793" "cell_1019" "cell_3455"
+    sampled$batches
+    #> [1] "depth_batch_6"  "depth_batch_12" "depth_batch_4"  "depth_batch_1"
 
 ## Fit the batch-number law
 
-For each design point below, we sample cells from a fixed total of 480 cells
-and vary the number of batches.
+For each design point below, we sample cells from a fixed total of 480
+cells and vary the number of batches.
 
+    run_design <- function(m_batch, rep_id, n_total = 480) {
+      cells_per_batch <- as.integer(n_total / m_batch)
+      sampled <- sample_batch_cells(
+        meta = meta,
+        batch_col = "batch",
+        m_batch = m_batch,
+        cells_per_batch = cells_per_batch,
+        seed = 1000 + 100 * rep_id + m_batch
+      )
+      bio <- batch_effect_mi(
+        view_a[, sampled$cells, drop = FALSE],
+        view_b[, sampled$cells, drop = FALSE],
+        r_x = 5,
+        r_y = 5,
+        transform_x = "log1p",
+        transform_y = "log1p"
+      )
+      data.frame(
+        experiment = "fixed_n_vary_m",
+        rep = rep_id,
+        m_batch = m_batch,
+        cells_per_batch = cells_per_batch,
+        n_cells = length(sampled$cells),
+        I_bio = bio$mi,
+        I_bio_norm = bio$mi_norm,
+        r_eff = bio$r_eff,
+        I_bio_overlap = normalized_overlap(bio$mi, bio$r_eff)
+      )
+    }
 
-``` r
-run_design <- function(m_batch, rep_id, n_total = 480) {
-  cells_per_batch <- as.integer(n_total / m_batch)
-  sampled <- sample_batch_cells(
-    meta = meta,
-    batch_col = "batch",
-    m_batch = m_batch,
-    cells_per_batch = cells_per_batch,
-    seed = 1000 + 100 * rep_id + m_batch
-  )
-  bio <- batch_effect_mi(
-    view_a[, sampled$cells, drop = FALSE],
-    view_b[, sampled$cells, drop = FALSE],
-    r_x = 5,
-    r_y = 5,
-    transform_x = "log1p",
-    transform_y = "log1p"
-  )
-  data.frame(
-    experiment = "fixed_n_vary_m",
-    rep = rep_id,
-    m_batch = m_batch,
-    cells_per_batch = cells_per_batch,
-    n_cells = length(sampled$cells),
-    I_bio = bio$mi,
-    I_bio_norm = bio$mi_norm
-  )
-}
+    replicate_results <- do.call(
+      rbind,
+      lapply(seq_len(3), function(rep_id) {
+        do.call(rbind, lapply(c(2, 3, 4, 6, 8, 12), run_design, rep_id = rep_id))
+      })
+    )
 
-replicate_results <- do.call(
-  rbind,
-  lapply(seq_len(3), function(rep_id) {
-    do.call(rbind, lapply(c(2, 3, 4, 6, 8, 12), run_design, rep_id = rep_id))
-  })
-)
+    summary_df <- summarize_batch_effect_results(replicate_results)
+    overlap_summary <- aggregate(
+      cbind(r_eff, I_bio_overlap) ~ experiment + m_batch + cells_per_batch + n_cells,
+      data = replicate_results,
+      FUN = mean
+    )
+    names(overlap_summary)[names(overlap_summary) == "r_eff"] <- "mean_r_eff"
+    names(overlap_summary)[names(overlap_summary) == "I_bio_overlap"] <- "mean_I_bio_overlap"
+    summary_df <- merge(
+      summary_df,
+      overlap_summary,
+      by = c("experiment", "m_batch", "cells_per_batch", "n_cells"),
+      sort = FALSE
+    )
+    summary_df
+    #>       experiment m_batch cells_per_batch n_cells mean_I_bio   sd_I_bio
+    #> 1 fixed_n_vary_m       2             240     480   3.639380 0.12469457
+    #> 2 fixed_n_vary_m       3             160     480   3.717235 0.30116928
+    #> 3 fixed_n_vary_m       4             120     480   3.995028 0.12045278
+    #> 4 fixed_n_vary_m       6              80     480   3.950956 0.44982444
+    #> 5 fixed_n_vary_m       8              60     480   3.920400 0.07807279
+    #> 6 fixed_n_vary_m      12              40     480   3.829490 0.24726134
+    #>     se_I_bio mean_I_bio_norm sd_I_bio_norm se_I_bio_norm n_rep_observed
+    #> 1 0.07199244       0.7278760    0.02493891    0.01439849              3
+    #> 2 0.17388016       0.7434469    0.06023386    0.03477603              3
+    #> 3 0.06954345       0.7990057    0.02409056    0.01390869              3
+    #> 4 0.25970626       0.7901913    0.08996489    0.05194125              3
+    #> 5 0.04507535       0.7840801    0.01561456    0.00901507              3
+    #> 6 0.14275640       0.7658980    0.04945227    0.02855128              3
+    #>   mean_r_eff mean_I_bio_overlap
+    #> 1          5          0.7665832
+    #> 2          5          0.7728545
+    #> 3          5          0.7975436
+    #> 4          5          0.7919477
+    #> 5          5          0.7915043
+    #> 6          5          0.7831375
 
-summary_df <- summarize_batch_effect_results(replicate_results)
-summary_df
-#>       experiment m_batch cells_per_batch n_cells mean_I_bio   sd_I_bio
-#> 1 fixed_n_vary_m       2             240     480   4.448235 0.25618292
-#> 2 fixed_n_vary_m       3             160     480   4.593037 0.42896768
-#> 3 fixed_n_vary_m       4             120     480   4.668589 0.30094731
-#> 4 fixed_n_vary_m       6              80     480   4.975604 0.22156321
-#> 5 fixed_n_vary_m       8              60     480   4.873855 0.08152891
-#> 6 fixed_n_vary_m      12              40     480   4.959085 0.10672961
-#>     se_I_bio mean_I_bio_norm sd_I_bio_norm se_I_bio_norm n_rep_observed
-#> 1 0.14790728       0.8896471    0.05123658   0.029581456              3
-#> 2 0.24766460       0.9186073    0.08579354   0.049532921              3
-#> 3 0.17375201       0.9337178    0.06018946   0.034750402              3
-#> 4 0.12791958       0.9951208    0.04431264   0.025583916              3
-#> 5 0.04707074       0.9747710    0.01630578   0.009414148              3
-#> 6 0.06162037       0.9918171    0.02134592   0.012324074              3
-```
+    batch_fit <- suppressWarnings(
+      fit_batch_scaling(
+        summary_df,
+        law = "batch_number",
+        target_col = "mean_I_bio_norm",
+        min_points = 5
+      )
+    )
 
+    coef(batch_fit)
+    #>         I_inf             C             A 
+    #>  8.000843e-01  1.626165e+02 -8.013218e-04
+    summary(batch_fit)
+    #>    type        model   x_col y_col n_points   ok message     I_inf        C
+    #> 1 batch batch_number m_batch I_fit        6 TRUE      ok 0.8000843 162.6165
+    #>               A        R2       RMSE        MAE
+    #> 1 -0.0008013218 0.5162645 0.01779689 0.01453404
+    predict(batch_fit, data.frame(m_batch = c(16, 24, 32)))
+    #> [1] 0.7919403 0.7946549 0.7960122
 
-``` r
-batch_fit <- suppressWarnings(
-  fit_batch_scaling(
-    summary_df,
-    law = "batch_number",
-    target_col = "mean_I_bio_norm",
-    min_points = 5
-  )
-)
+The same batch-number law can also be fit to the bounded
+normalized-overlap score.
 
-coef(batch_fit)
-#>      I_inf          C          A 
-#>  1.0273123  0.2160777 -1.8437698
-summary(batch_fit)
-#>    type        model   x_col y_col n_points   ok message    I_inf         C
-#> 1 batch batch_number m_batch I_fit        6 TRUE      ok 1.027312 0.2160777
-#>          A        R2       RMSE         MAE
-#> 1 -1.84377 0.9012202 0.01236638 0.009736167
-predict(batch_fit, data.frame(m_batch = c(16, 24, 32)))
-#> [1] 1.003746 1.011319 1.015208
-```
+    batch_overlap_fit <- suppressWarnings(
+      fit_batch_scaling(
+        summary_df,
+        law = "batch_number",
+        target_col = "mean_I_bio_overlap",
+        min_points = 5
+      )
+    )
 
-## Plot
+    coef(batch_overlap_fit)
+    #>        I_inf            C            A 
+    #>  0.797643208 42.588950118 -0.001324659
+    summary(batch_overlap_fit)
+    #>    type        model   x_col y_col n_points   ok message     I_inf        C
+    #> 1 batch batch_number m_batch I_fit        6 TRUE      ok 0.7976432 42.58895
+    #>              A       R2        RMSE         MAE
+    #> 1 -0.001324659 0.520242 0.007646278 0.006212359
+    predict(batch_overlap_fit, data.frame(m_batch = c(16, 24, 32)))
+    #> [1] 0.7941174 0.7952926 0.7958802
 
+## Plot biological information
 
-``` r
-plot(batch_fit, xlab = "Number of pseudo-batches", ylab = "Mean normalized biological information")
-```
+    plot(batch_fit, xlab = "Number of pseudo-batches", ylab = "Mean normalized biological information")
 
-![plot of chunk plot-batch-law](figure/batch-number-plot-batch-law-1.png)
+![](figure/batch-number-plot-batch-law-1.png)
+
+## Plot empirical overlap
+
+    plot(batch_overlap_fit, xlab = "Number of pseudo-batches", ylab = "Empirical normalized overlap")
+
+![](figure/batch-number-plot-batch-overlap-law-1.png)
 
 ## Cells per batch variant
 

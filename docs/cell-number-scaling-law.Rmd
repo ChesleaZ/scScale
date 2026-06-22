@@ -20,21 +20,34 @@ local_lib <- normalizePath(file.path("..", "..", "..", ".rlib"), mustWork = FALS
 if (dir.exists(local_lib)) .libPaths(c(local_lib, .libPaths()))
 library(scScale)
 set.seed(11)
+
+make_tutorial_counts <- function(seed = 11, n_genes = 400, n_cells = 5000, n_factors = 6) {
+  set.seed(seed)
+  gene_loadings <- matrix(rnorm(n_genes * n_factors, sd = 0.45), nrow = n_genes)
+  cell_scores <- matrix(rnorm(n_cells * n_factors), nrow = n_cells)
+  gene_baseline <- rnorm(n_genes, mean = log(1.5), sd = 0.35)
+  log_mu <- gene_baseline + gene_loadings %*% t(cell_scores) / sqrt(n_factors)
+  counts <- matrix(rpois(length(log_mu), lambda = pmin(exp(log_mu), 80)), nrow = n_genes)
+  rownames(counts) <- paste0("gene_", seq_len(n_genes))
+  colnames(counts) <- paste0("cell_", seq_len(n_cells))
+  counts
+}
 ```
 
 ## Goal
 
 This example asks how a spectral signal estimate changes as the number of cells
-increases. It starts from a real Jurkat 10x single-cell count block already
-sampled in this repository: 400 highly variable genes by 5,000 cells, derived
-from `data/Jurkat/sample_filtered_feature_bc_matrix`.
+increases. It uses a compact 400-feature by 5,000-cell tutorial count block. If
+the repository-local Jurkat 10x block is available, the tutorial uses it;
+otherwise it generates a small structured count matrix so the page remains
+self-contained.
 
 The workflow is:
 
-1. load the real feature-by-cell count matrix;
+1. load or generate the feature-by-cell count matrix;
 2. sample different numbers of cells;
 3. call `fit_cell_scaling()` to fit spectra across the grid;
-4. inspect `coef()`, `summary()`, and `plot()`;
+4. compare theoretical and empirical normalized overlap scores;
 5. use `predict()` to extrapolate to larger cell counts.
 
 ## Load real Jurkat counts
@@ -46,20 +59,40 @@ counts_file <- file.path(
   "jurkat_glmpca_counts_hvg.csv"
 )
 
-counts <- as.matrix(read.csv(counts_file, row.names = 1, check.names = FALSE))
+if (file.exists(counts_file)) {
+  counts <- as.matrix(read.csv(counts_file, row.names = 1, check.names = FALSE))
+  counts_source <- "Jurkat 10x HVG block"
+} else {
+  counts <- make_tutorial_counts(seed = 11)
+  counts_source <- "synthetic structured tutorial block"
+}
+
+counts_source
 dim(counts)
 summary(colSums(counts))
 ```
 
-The full source dataset contains many more cells; this tutorial uses a compact
-HVG block so it renders quickly.
+The full source dataset contains many more cells when the Jurkat block is
+available; this tutorial uses a compact HVG-like block so it renders quickly.
 
 ```{r source-summary}
-sample_summary <- read.csv(file.path(
+sample_summary_file <- file.path(
   "..", "..", "..",
   "outputs", "exploration", "jurkat_glmpca_gaussian_snr_by_n",
   "jurkat_glmpca_sample_summary.csv"
-))
+)
+
+if (file.exists(sample_summary_file)) {
+  sample_summary <- read.csv(sample_summary_file)
+} else {
+  sample_summary <- data.frame(
+    dataset = counts_source,
+    n_total_cells = ncol(counts),
+    sampled_cells = ncol(counts),
+    n_genes_used = nrow(counts),
+    mean_umi_per_cell = mean(colSums(counts))
+  )
+}
 sample_summary[, c("dataset", "n_total_cells", "sampled_cells", "n_genes_used", "mean_umi_per_cell")]
 ```
 
@@ -85,6 +118,45 @@ cell_fit <- fit_cell_scaling(
 cell_fit$data
 ```
 
+## Empirical reference overlap
+
+For a direct check, compare each subsampled RNA embedding with the full RNA
+embedding using the same subspace-overlap MI formula. We normalize both
+theoretical and empirical MI as `1 - exp(-2 * MI / r)`, which puts the scores on
+the same bounded overlap scale.
+
+```{r cell-empirical-mi}
+cell_grid <- c(250, 500, 1000, 2000, 3500, 5000)
+
+normalized_overlap <- function(mi, r) {
+  1 - exp(-2 * mi / pmax(r, 1))
+}
+
+cell_embedding <- function(x, r = 8, n_features = 300, min_cells = 10) {
+  features <- select_hvgs(x, n_features = n_features, min_cells = min_cells)
+  right_singular_vectors(log1p(x[features, , drop = FALSE]), r = r)
+}
+
+z_full <- cell_embedding(counts, r = 8, n_features = 300, min_cells = 10)
+
+cell_empirical <- do.call(rbind, lapply(cell_grid, function(n_cells) {
+  set.seed(1 + 10000L + n_cells)
+  cells <- if (n_cells == ncol(counts)) colnames(counts) else sample(colnames(counts), n_cells)
+  z_sub <- cell_embedding(counts[, cells, drop = FALSE], r = 8, n_features = 300, min_cells = 10)
+  emp <- subspace_overlap_mi(z_sub, z_full)
+  data.frame(
+    n_cells = n_cells,
+    empirical_mi = emp$mi,
+    empirical_r_eff = emp$r_eff,
+    empirical_overlap = normalized_overlap(emp$mi, emp$r_eff)
+  )
+}))
+
+cell_compare <- merge(cell_fit$data, cell_empirical, by = "n_cells")
+cell_compare$theory_overlap <- normalized_overlap(cell_compare$mean_mi_norm, 1)
+cell_compare[, c("n_cells", "theory_overlap", "empirical_overlap", "mean_mi_norm", "empirical_mi", "empirical_r_eff")]
+```
+
 ## Inspect and extrapolate
 
 The fitted object supports the usual R-style methods.
@@ -95,10 +167,24 @@ summary(cell_fit)
 predict(cell_fit, data.frame(n_cells = c(7500, 10000, 20000)))
 ```
 
-## Plot
+## Plot theory scaling law
 
 ```{r plot-cell-law}
 plot(cell_fit, xlab = "Cells sampled", ylab = "Theoretical MI / retained rank")
+```
+
+## Plot empirical overlap
+
+```{r plot-cell-empirical}
+plot(
+  cell_compare$n_cells,
+  cell_compare$empirical_overlap,
+  pch = 17,
+  col = "#d95f02",
+  type = "b",
+  xlab = "Cells sampled",
+  ylab = "Empirical normalized overlap"
+)
 ```
 
 ## Adapt to real data

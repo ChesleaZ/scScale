@@ -20,20 +20,34 @@ local_lib <- normalizePath(file.path("..", "..", "..", ".rlib"), mustWork = FALS
 if (dir.exists(local_lib)) .libPaths(c(local_lib, .libPaths()))
 library(scScale)
 set.seed(13)
+
+make_tutorial_counts <- function(seed = 11, n_genes = 400, n_cells = 5000, n_factors = 6) {
+  set.seed(seed)
+  gene_loadings <- matrix(rnorm(n_genes * n_factors, sd = 0.45), nrow = n_genes)
+  cell_scores <- matrix(rnorm(n_cells * n_factors), nrow = n_cells)
+  gene_baseline <- rnorm(n_genes, mean = log(1.5), sd = 0.35)
+  log_mu <- gene_baseline + gene_loadings %*% t(cell_scores) / sqrt(n_factors)
+  counts <- matrix(rpois(length(log_mu), lambda = pmin(exp(log_mu), 80)), nrow = n_genes)
+  rownames(counts) <- paste0("gene_", seq_len(n_genes))
+  colnames(counts) <- paste0("cell_", seq_len(n_cells))
+  counts
+}
 ```
 
 ## Goal
 
 This example asks how a spectral signal estimate changes with sequencing depth,
-represented here as total UMI depth. It starts from the same real Jurkat 10x
-HVG count block used in the cell-number tutorial.
+represented here as total UMI depth. It uses the same compact tutorial count
+block as the cell-number tutorial. If the repository-local Jurkat 10x block is
+available, the tutorial uses it; otherwise it generates a small structured count
+matrix so the page remains self-contained.
 
 The workflow is:
 
-1. load a real feature-by-cell count matrix;
+1. load or generate a feature-by-cell count matrix;
 2. depth-subsample UMIs at several fractions;
 3. call `fit_umi_scaling()` to fit spectra across the depth grid;
-4. inspect `coef()`, `summary()`, and `plot()`;
+4. compare theoretical and empirical normalized overlap scores;
 5. use `predict()` to extrapolate to higher depth.
 
 ## Load real Jurkat counts
@@ -45,7 +59,15 @@ counts_file <- file.path(
   "jurkat_glmpca_counts_hvg.csv"
 )
 
-counts_full <- as.matrix(read.csv(counts_file, row.names = 1, check.names = FALSE))
+if (file.exists(counts_file)) {
+  counts_full <- as.matrix(read.csv(counts_file, row.names = 1, check.names = FALSE))
+  counts_source <- "Jurkat 10x HVG block"
+} else {
+  counts_full <- make_tutorial_counts(seed = 11)
+  counts_source <- "synthetic structured tutorial block"
+}
+
+counts_source
 dim(counts_full)
 summary(colSums(counts_full))
 ```
@@ -81,6 +103,54 @@ umi_fit <- fit_umi_scaling(
 umi_fit$data
 ```
 
+## Empirical reference overlap
+
+For a direct check, compare each UMI-thinned RNA embedding with the full-depth
+RNA embedding using the same subspace-overlap MI formula. We normalize both
+theoretical and empirical MI as `1 - exp(-2 * MI / r)`, which puts the scores on
+the same bounded overlap scale.
+
+```{r umi-empirical-mi}
+umi_grid <- c(0.02, 0.05, 0.1, 0.2, 0.4, 0.7, 1.0)
+
+normalized_overlap <- function(mi, r) {
+  1 - exp(-2 * mi / pmax(r, 1))
+}
+
+umi_embedding <- function(x, r = 8, n_features = 300, min_cells = 10) {
+  features <- select_hvgs(x, n_features = n_features, min_cells = min_cells)
+  right_singular_vectors(log1p(x[features, , drop = FALSE]), r = r)
+}
+
+thin_counts <- function(x, fraction) {
+  matrix(
+    rbinom(length(x), size = as.integer(x), prob = fraction),
+    nrow = nrow(x),
+    dimnames = dimnames(x)
+  )
+}
+
+z_full <- umi_embedding(counts_base, r = 8, n_features = 300, min_cells = 10)
+
+umi_empirical <- do.call(rbind, lapply(umi_grid, function(frac) {
+  set.seed(1 + 10000L + as.integer(round(frac * 10000)))
+  counts_sub <- thin_counts(counts_base, frac)
+  z_sub <- umi_embedding(counts_sub, r = 8, n_features = 300, min_cells = 10)
+  emp <- subspace_overlap_mi(z_sub, z_full)
+  data.frame(
+    umi_fraction = frac,
+    mean_umi_per_cell = mean(colSums(counts_sub)),
+    empirical_mi = emp$mi,
+    empirical_r_eff = emp$r_eff,
+    empirical_overlap = normalized_overlap(emp$mi, emp$r_eff)
+  )
+}))
+
+umi_compare <- merge(umi_fit$data, umi_empirical, by = "mean_umi_per_cell")
+umi_compare$theory_overlap <- normalized_overlap(umi_compare$mean_mi_norm, 1)
+umi_compare[, c("mean_umi_per_cell", "theory_overlap", "empirical_overlap", "mean_mi_norm", "empirical_mi", "empirical_r_eff")]
+```
+
 ## Inspect and extrapolate
 
 ```{r inspect-umi-fit}
@@ -89,10 +159,24 @@ summary(umi_fit)
 predict(umi_fit, data.frame(mean_umi_per_cell = c(2500, 3500, 5000)))
 ```
 
-## Plot
+## Plot theory scaling law
 
 ```{r plot-umi-law}
 plot(umi_fit, xlab = "Mean UMI per cell in HVG block", ylab = "Theoretical MI / retained rank")
+```
+
+## Plot empirical overlap
+
+```{r plot-umi-empirical}
+plot(
+  umi_compare$mean_umi_per_cell,
+  umi_compare$empirical_overlap,
+  pch = 17,
+  col = "#d95f02",
+  type = "b",
+  xlab = "Mean UMI per cell in HVG block",
+  ylab = "Empirical normalized overlap"
+)
 ```
 
 ## Adapt to real data
