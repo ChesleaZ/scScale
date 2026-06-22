@@ -5,10 +5,12 @@ Authors@R:
     person("Jingyuan", "Hu", role = c("aut", "cre"), email = "jingyuanhu@example.com")
 Author: Jingyuan Hu [aut, cre]
 Maintainer: Jingyuan Hu <jingyuanhu@example.com>
-Description: Single-cell scaling law utilities for spectral mutual
-    information, median Marchenko-Pastur noise calibration, BBP spike
-    inversion, and batch-effect scaling analyses.
+Description: Single-cell scaling law utilities for empirical task scores,
+    spectral mutual information, median Marchenko-Pastur noise calibration,
+    BBP spike inversion, and batch-effect scaling analyses.
 License: MIT + file LICENSE
+URL: https://github.com/ChesleaZ/scScale
+BugReports: https://github.com/ChesleaZ/scScale/issues
 Encoding: UTF-8
 Suggests:
     irlba,

@@ -1,5 +1,4 @@
-# Median Marchenko-Pastur calibration adapted from
-# ChesleaZ/Scaling-Laws-in-Representation-Learning.
+# Median Marchenko-Pastur calibration aligned with ChesleaZ/scScale.
 
 mp_cache <- new.env(parent = emptyenv())
 

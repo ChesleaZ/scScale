@@ -10,14 +10,14 @@ Install the development version from GitHub:
 
 ```r
 install.packages("remotes")
-remotes::install_github("ChelseaZ/scScale")
+remotes::install_github("ChesleaZ/scScale")
 ```
 
 You can also install with `pak`:
 
 ```r
 install.packages("pak")
-pak::pak("ChelseaZ/scScale")
+pak::pak("ChesleaZ/scScale")
 ```
 
 ## Quick Start
@@ -57,6 +57,23 @@ summary_df <- data.frame(
 )
 
 fit_batch_effect_scaling(summary_df, law = "batch_number", min_points = 4)
+```
+
+Empirical task scores can be computed against discrete or numeric cell-level
+targets:
+
+```r
+x <- matrix(rnorm(2000), nrow = 100)  # features x cells
+colnames(x) <- paste0("cell", seq_len(ncol(x)))
+
+labels <- rep(c("A", "B"), length.out = ncol(x))
+names(labels) <- colnames(x)
+empirical_mi(x, labels, r = 5)$mi
+discrete_vector_empirical_mi(x, labels, r = 5)$mi
+
+score <- rnorm(ncol(x))
+names(score) <- colnames(x)
+numeric_vector_empirical_mi(x, score, r = 5)$mi
 ```
 
 ## Command Line

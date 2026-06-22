@@ -5,6 +5,13 @@
 \alias{find_eigenvalues}
 \alias{mi_theory}
 \alias{mi_theory_from_eigenvalues}
+\alias{right_singular_vectors}
+\alias{label_target_matrix}
+\alias{subspace_overlap_mi}
+\alias{numeric_target_matrix}
+\alias{empirical_mi}
+\alias{discrete_vector_empirical_mi}
+\alias{numeric_vector_empirical_mi}
 \alias{cov_eigenvalues}
 \alias{read_counts_csv}
 \alias{read_eigenvalues_csv}
@@ -34,6 +41,23 @@ mi_theory(cur, ref, side = c("cells", "genes"), r = NULL)
 mi_theory_from_eigenvalues(cur_eigenvalues, ref_eigenvalues, n_cur, p_cur,
   n_ref = n_cur, p_ref = p_cur, side = c("cells", "genes"), r = 10,
   R = 50, p_sim = 800, seed = 1)
+
+right_singular_vectors(x, r = 10, drop_first = FALSE, use_irlba = TRUE,
+  maxit = 2000, work = NULL)
+
+empirical_mi(x, target, r = 10, eps = 1e-12, use_irlba = TRUE)
+
+discrete_vector_empirical_mi(x, labels, r = 10, eps = 1e-12,
+  use_irlba = TRUE)
+
+numeric_vector_empirical_mi(x, values, r = 10, eps = 1e-12,
+  use_irlba = TRUE)
+
+label_target_matrix(labels, center = TRUE, drop_empty = TRUE)
+
+numeric_target_matrix(values, center = TRUE, scale = TRUE)
+
+subspace_overlap_mi(z1, z2, eps = 1e-12)
 }
 \arguments{
 \item{eigenvalues, cur_eigenvalues, ref_eigenvalues}{Covariance eigenvalues,
@@ -58,14 +82,41 @@ noise scale. If \code{NULL}, median-MP noise is fit from \code{eigenvalues}.}
 \item{cur, ref}{Spike-fit objects returned by \code{fit_spikes()}.}
 \item{r}{Number of leading spike/overlap dimensions to keep.}
 \item{side}{Whether to use the cell-side or gene-side overlap formula.}
+\item{target}{Discrete or numeric cell-level target vector.}
+\item{labels}{Discrete cell labels. They are converted to a centered one-hot
+target matrix.}
+\item{values}{Numeric cell-level target vector. It is centered and scaled before
+being used as a one-dimensional target embedding.}
+\item{center}{Whether to center target rows before embedding/scoring.}
+\item{drop_empty}{Whether to drop unused discrete label levels.}
+\item{scale}{Whether to scale a numeric target vector to unit standard
+deviation after centering.}
+\item{z1, z2}{Cell-by-r matrices of learned cell scores or right singular
+vectors.}
+\item{drop_first}{Whether to drop the first right singular vector before keeping
+the requested rank.}
+\item{eps}{Numerical clipping level for overlap eigenvalues.}
+\item{use_irlba}{Whether to use \code{irlba} for truncated SVD when available.}
+\item{maxit, work}{Optional \code{irlba} controls.}
 }
 \value{
 Lists or data frames containing the fitted noise scale, MP upper edge, BBP
-spike strengths, theoretical overlap gammas, and mutual information.
+spike strengths, theoretical overlap gammas, empirical subspace-overlap gammas,
+and mutual-information-like scores.
 }
 \examples{
 mu <- c(12, 6, 3, 1.2, 1, 0.9, 0.8)
 noise <- fit_noise(mu, n = 100, p = 50, R = 2, p_sim = 50)
 fit <- fit_spikes(mu, n = 100, p = 50, noise = noise)
 mi_theory(fit, fit, side = "cells", r = 2)$mi
+
+x <- matrix(rnorm(30 * 20), nrow = 30)
+colnames(x) <- paste0("cell", seq_len(ncol(x)))
+labels <- rep(c("A", "B"), each = 10)
+names(labels) <- colnames(x)
+empirical_mi(x, labels, r = 3)$mi
+
+numeric_target <- rnorm(ncol(x))
+names(numeric_target) <- colnames(x)
+numeric_vector_empirical_mi(x, numeric_target, r = 3)$mi
 }
