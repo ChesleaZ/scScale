@@ -104,15 +104,12 @@ Rscript inst/scripts/run_from_eigenvalues.R \
 
 ## Tutorials
 
-Rendered tutorials are in [`docs/`](docs/):
+Rendered tutorials are available on the GitHub Pages site:
 
-- [Tutorial index](docs/scScale-tutorial.html)
-- [Cell-number scaling law](docs/cell-number-scaling-law.html)
-- [UMI scaling law](docs/umi-scaling-law.html)
-- [Batch-number scaling law](docs/batch-number-scaling-law.html)
+- [Tutorial index](https://chesleaz.github.io/scScale/scScale-tutorial.html)
+- [Cell-number scaling law](https://chesleaz.github.io/scScale/cell-number-scaling-law.html)
+- [UMI scaling law](https://chesleaz.github.io/scScale/umi-scaling-law.html)
+- [Batch-number scaling law](https://chesleaz.github.io/scScale/batch-number-scaling-law.html)
 
-The GitHub Pages website entry point is [`docs/index.html`](docs/index.html).
-When Pages is enabled for this repository using the `main` branch and `/docs`
-folder, the tutorials will be available at:
-
-<https://chesleaz.github.io/Scaling-law-summer-version-/>
+The source files are in [`docs/`](docs/), and the local entry point is
+[`docs/index.html`](docs/index.html).
