@@ -20,7 +20,9 @@ scscale_fit(x, input = c("counts", "normalized", "representation",
   store_matrix = FALSE, use_irlba = TRUE)
 
 scscale_mi(fit, target_fit, n_grid = NULL, U_grid = NULL,
-  sampling_rates = NULL, combine = TRUE, r = NULL, eps = 1e-12)
+  sampling_rates = NULL, combine = TRUE, empirical = TRUE,
+  store_empirical_subspaces = FALSE, use_irlba = TRUE, r = NULL,
+  eps = 1e-12)
 }
 \arguments{
 \item{x}{A feature-by-cell count matrix, sparse \pkg{Matrix}, normalized
@@ -52,14 +54,21 @@ computations when available.}
 \item{n_grid}{Optional cell-number grid for MI scaling.}
 \item{combine}{If \code{TRUE}, return the full cell-number by UMI grid when
 both grids are supplied to \code{scscale_mi()}.}
+\item{empirical}{Whether to compute empirical subspace MI from stored
+normalized matrices. Both fitted objects must have been created with
+\code{store_matrix = TRUE}.}
+\item{store_empirical_subspaces}{Whether to keep the fitted RNA and target
+right singular vector matrices in the \code{empirical} output component.}
 \item{eps}{Numerical clipping value for MI calculations.}
 }
 \value{
 \code{scscale_fit()} returns an \code{scscale_fit} object with dimensions,
 normalization metadata, covariance spectrum, MP bulk fit, spike table, finite
 and infinite recoverability vectors, optional UMI scaling, and optional MI
-results. \code{scscale_mi()} returns theoretical MI at the fitted point and,
-when requested, UMI, cell-number, or full cell-by-UMI scaling tables.
+results. \code{scscale_mi()} returns theoretical MI, infinite-cell MI,
+empirical subspace MI when stored matrices are available, major intermediate
+quantities such as \code{q_X}, \code{d2_X}, and theta products, and, when
+requested, UMI, cell-number, or full cell-by-UMI scaling tables.
 }
 \details{
 The public workflow is:
@@ -74,8 +83,12 @@ data(gse164378_3p_citeseq_hvg)
 rna <- gse164378_3p_citeseq_hvg$rna_counts[, 1:200]
 adt <- gse164378_3p_citeseq_hvg$adt_counts[, 1:200]
 
-fit_rna <- scscale_fit(rna, r = 3, fit_umi = FALSE, mp_grid_n = 500)
-fit_adt <- scscale_fit(adt, r = 3, fit_umi = FALSE, mp_grid_n = 500)
-scscale_mi(fit_rna, fit_adt, n_grid = c(100, 200), r = 3)$cell_scaling
+fit_rna <- scscale_fit(rna, r = 3, fit_umi = FALSE, store_matrix = TRUE,
+  mp_grid_n = 500)
+fit_adt <- scscale_fit(adt, r = 3, fit_umi = FALSE, store_matrix = TRUE,
+  mp_grid_n = 500)
+mi <- scscale_mi(fit_rna, fit_adt, n_grid = c(100, 200), r = 3)
+mi$I_empirical
+mi$cell_scaling
 }
 \keyword{models}

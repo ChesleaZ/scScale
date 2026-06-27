@@ -19,10 +19,11 @@ rna_fit <- scscale_fit(
   rna,
   r = 12,
   fit_umi = TRUE,
+  store_matrix = TRUE,
   sampling_rates = c(0.10, 0.20, 0.35, 0.50, 0.70, 0.85, 1.00)
 )
 
-adt_fit <- scscale_fit(adt, r = 12, fit_umi = FALSE)
+adt_fit <- scscale_fit(adt, r = 12, fit_umi = FALSE, store_matrix = TRUE)
 
 mi <- scscale_mi(
   rna_fit,
@@ -33,13 +34,18 @@ mi <- scscale_mi(
 
 mi$I_theory
 mi$I_infinity
+mi$I_empirical
+mi$intermediate$theta_double
 mi$grid
 ```
 
 `scscale_fit()` returns the fitted spectrum, MP bulk fit, spike table, finite
 recoverability `theta_X`, infinite-cell recoverability `theta_infinity`, and
 optionally UMI scaling. The spike table contains the fitted `d2_X`, `q_X`, MP
-edge, and related parameters.
+edge, and related parameters. `scscale_mi()` returns theoretical MI,
+infinite-cell MI, empirical subspace MI when both fits store normalized
+matrices, and compact intermediate quantities such as `q_X`, `q_Y`,
+`theta_double`, and fitted MP bulk parameters.
 
 The package examples are:
 

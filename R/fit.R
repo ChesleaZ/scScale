@@ -578,6 +578,9 @@ scscale_mi <- function(
   U_grid = NULL,
   sampling_rates = NULL,
   combine = TRUE,
+  empirical = TRUE,
+  store_empirical_subspaces = FALSE,
+  use_irlba = TRUE,
   r = NULL,
   eps = 1e-12
 ) {
@@ -591,10 +594,15 @@ scscale_mi <- function(
   theta_Y_infinity <- target_fit$theta_infinity[seq_len(m)]
 
   base <- scscale_information_from_theta(fit$theta_X[seq_len(m)], theta_Y, eps = eps)
+  theta_double <- pmin(pmax(fit$theta_X[seq_len(m)] * theta_Y, 0), 1 - eps)
   infinite <- scscale_information_from_theta(
     fit$theta_infinity[seq_len(m)],
     theta_Y_infinity,
     eps = eps
+  )
+  theta_double_infinity <- pmin(
+    pmax(fit$theta_infinity[seq_len(m)] * theta_Y_infinity, 0),
+    1 - eps
   )
 
   out <- list(
@@ -606,8 +614,53 @@ scscale_mi <- function(
     theta_Y = theta_Y,
     theta_X_infinity = fit$theta_infinity[seq_len(m)],
     theta_Y_infinity = theta_Y_infinity,
-    r = m
+    r = m,
+    intermediate = list(
+      q_X = fit$spikes$q_X[seq_len(m)],
+      q_Y = target_fit$spikes$q_X[seq_len(m)],
+      d2_X = fit$spikes$d2_X[seq_len(m)],
+      d2_Y = target_fit$spikes$d2_X[seq_len(m)],
+      theta_double = theta_double,
+      theta_double_infinity = theta_double_infinity,
+      c_X = fit$c_X,
+      c_Y = target_fit$c_X,
+      lambda_plus_X = fit$bulk$lambda_plus,
+      lambda_plus_Y = target_fit$bulk$lambda_plus,
+      tau2_X = fit$bulk$tau2,
+      tau2_Y = target_fit$bulk$tau2
+    )
   )
+
+  if (isTRUE(empirical)) {
+    has_matrices <- !is.null(fit$matrix) && !is.null(target_fit$matrix)
+    if (has_matrices) {
+      z_X <- right_singular_vectors(fit$matrix, r = m, use_irlba = use_irlba)
+      z_Y <- right_singular_vectors(target_fit$matrix, r = m, use_irlba = use_irlba)
+      empirical_overlap <- subspace_overlap_mi(z_X, z_Y, eps = eps)
+      out$I_empirical <- empirical_overlap$mi
+      out$empirical <- list(
+        available = TRUE,
+        I_empirical = empirical_overlap$mi,
+        mi = empirical_overlap$mi,
+        gamma = empirical_overlap$gamma,
+        r_eff = empirical_overlap$r_eff
+      )
+      if (isTRUE(store_empirical_subspaces)) {
+        out$empirical$z_X <- z_X
+        out$empirical$z_Y <- z_Y
+      }
+    } else {
+      out$I_empirical <- NA_real_
+      out$empirical <- list(
+        available = FALSE,
+        I_empirical = NA_real_,
+        mi = NA_real_,
+        gamma = numeric(0),
+        r_eff = 0L,
+        reason = "Empirical MI requires both fit objects to contain stored normalized matrices. Refit with store_matrix = TRUE."
+      )
+    }
+  }
 
   if (!is.null(n_grid)) {
     out$cell_scaling <- stats::aggregate(
