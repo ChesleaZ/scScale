@@ -1,0 +1,402 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>RNA-ADT Mutual Information With GSE164378 3' CITE-seq</title><style>body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;line-height:1.55;max-width:980px;margin:40px auto;padding:0 22px;color:#1f2933}pre{background:#f6f8fa;padding:12px;overflow:auto;border-radius:6px}code{background:#f6f8fa;padding:1px 3px;border-radius:3px}pre code{padding:0}table{border-collapse:collapse;margin:18px 0;display:block;overflow-x:auto}th,td{border:1px solid #d0d7de;padding:6px 9px;text-align:right}th{text-align:left;background:#f6f8fa}img{max-width:100%;height:auto}h1,h2{line-height:1.2}a{color:#0969da}</style></head><body><hr />
+<h2>title: &quot;RNA-ADT Mutual Information With GSE164378 3' CITE-seq&quot;
+output: html_document</h2>
+<p>This page compares theoretical and empirical RNA-to-ADT spectral mutual
+information on the 4,000-cell GSE164378 3' CITE-seq package example.</p>
+<pre><code class="language-r">library(scScale)
+</code></pre>
+<pre><code>## Loading required package: Matrix
+</code></pre>
+<pre><code class="language-r">data(gse164378_3p_citeseq_hvg)
+
+rna_counts &lt;- gse164378_3p_citeseq_hvg$rna_counts
+adt_counts &lt;- gse164378_3p_citeseq_hvg$adt_counts
+r &lt;- 12
+
+dim(rna_counts)
+</code></pre>
+<pre><code>## [1] 2000 4000
+</code></pre>
+<pre><code class="language-r">dim(adt_counts)
+</code></pre>
+<pre><code>## [1]  228 4000
+</code></pre>
+<h2>Fit Modalities</h2>
+<pre><code class="language-r">rna_fit &lt;- scscale_fit(
+  rna_counts,
+  r = r,
+  fit_umi = FALSE,
+  mp_max_iter = 20,
+  mp_grid_n = 3000,
+  store_matrix = TRUE
+)
+
+adt_fit &lt;- scscale_fit(
+  adt_counts,
+  r = r,
+  fit_umi = FALSE,
+  mp_max_iter = 20,
+  mp_grid_n = 3000
+)
+
+theta_Y &lt;- adt_fit$theta_X[seq_len(r)]
+I_infinity &lt;- scscale_i_infinity(rna_fit, adt_fit, r = r)$I_infinity
+
+data.frame(
+  modality = c(&quot;RNA&quot;, &quot;ADT&quot;),
+  p = c(rna_fit$p, adt_fit$p),
+  n = c(rna_fit$n, adt_fit$n),
+  c_X = c(rna_fit$c_X, adt_fit$c_X),
+  tau2 = c(rna_fit$bulk$tau2, adt_fit$bulk$tau2),
+  lambda_plus = c(rna_fit$bulk$lambda_plus, adt_fit$bulk$lambda_plus),
+  selected_iteration = c(rna_fit$bulk$selected_iteration, adt_fit$bulk$selected_iteration)
+)
+</code></pre>
+<pre><code>##   modality    p    n   c_X      tau2 lambda_plus selected_iteration
+## 1      RNA 2000 4000 0.500 0.6022713   1.7551473                  8
+## 2      ADT  228 4000 0.057 0.1435793   0.2203215                 17
+</code></pre>
+<pre><code class="language-r">data.frame(
+  I_theory = scscale_information_from_theta(rna_fit$theta_X[seq_len(r)], theta_Y),
+  I_infinity = I_infinity
+)
+</code></pre>
+<pre><code>##   I_theory I_infinity
+## 1 16.76075   16.84747
+</code></pre>
+<h2>UMI Scaling</h2>
+<pre><code class="language-r">sampling_rates &lt;- c(0.10, 0.20, 0.35, 0.50, 0.70, 0.85, 1.00)
+
+umi_scaling &lt;- scscale_umi_scaling(
+  rna_counts,
+  sampling_rates = sampling_rates,
+  r = r,
+  seed = 164378,
+  n_replicates = 1,
+  theta_Y = theta_Y,
+  reference_fit = rna_fit,
+  empirical = FALSE,
+  mp_max_iter = 20,
+  mp_grid_n = 2000
+)
+
+umi_theory &lt;- unique(umi_scaling$scaling[, c(
+  &quot;sampling_rate&quot;, &quot;U&quot;, &quot;total_umi_observed&quot;, &quot;I_theory&quot;, &quot;I_infinity&quot;
+)])
+
+empirical_umi_rows &lt;- vector(&quot;list&quot;, length(sampling_rates))
+for (i in seq_along(sampling_rates)) {
+  rho &lt;- sampling_rates[i]
+  rna_sub &lt;- rna_counts
+  if (rho &lt; 1) {
+    rna_sub &lt;- scscale_downsample_counts_fraction(rna_sub, fraction = rho, seed = 364378 + i)
+  }
+  mi_emp &lt;- scscale_empirical_mi(rna_sub, adt_counts, r = r)
+  empirical_umi_rows[[i]] &lt;- data.frame(
+    sampling_rate = rho,
+    I_empirical = mi_emp$mi,
+    r_eff = mi_emp$r_eff
+  )
+}
+umi_empirical &lt;- do.call(rbind, empirical_umi_rows)
+umi_plot &lt;- merge(umi_theory, umi_empirical, by = &quot;sampling_rate&quot;, all.x = TRUE)
+umi_plot
+</code></pre>
+<pre><code>##   sampling_rate        U total_umi_observed  I_theory I_infinity I_empirical
+## 1          0.10  2660343            2660797  7.745760   8.775513    4.437601
+## 2          0.20  5320685            5322255  9.791869  10.466839    4.960192
+## 3          0.35  9311199            9308479 11.392916  11.857697    5.317728
+## 4          0.50 13301713           13299605 12.449566  12.804183    5.523037
+## 5          0.70 18622398           18622917 13.429134  13.696920    5.644656
+## 6          0.85 22612912           22611795 13.996796  14.221041    5.699073
+## 7          1.00 26603426           26603426 14.477099  14.668580    5.740955
+##   r_eff
+## 1    12
+## 2    12
+## 3    12
+## 4    12
+## 5    12
+## 6    12
+## 7    12
+</code></pre>
+<h2>Cell Number Scaling</h2>
+<pre><code class="language-r">n_grid &lt;- c(500, 1000, 2000, 3000, 4000)
+rho_grid &lt;- c(0.35, 0.50, 0.70, 0.85, 1.00)
+set.seed(164378)
+cell_order &lt;- sample(colnames(rna_counts), max(n_grid))
+
+cell_full &lt;- aggregate(
+  I_theory ~ n + c_X,
+  data = scscale_cell_scaling(
+    rna_fit$spikes$d2_X[seq_len(r)],
+    p = rna_fit$p,
+    n_grid = n_grid,
+    theta_Y = theta_Y
+  ),
+  FUN = unique
+)
+cell_full$sampling_rate &lt;- 1
+
+empirical_cell_rows &lt;- vector(&quot;list&quot;, length(n_grid))
+for (i in seq_along(n_grid)) {
+  n_i &lt;- n_grid[i]
+  cells &lt;- cell_order[seq_len(n_i)]
+  mi_emp &lt;- scscale_empirical_mi(
+    rna_counts[, cells, drop = FALSE],
+    adt_counts[, cells, drop = FALSE],
+    r = r
+  )
+  empirical_cell_rows[[i]] &lt;- data.frame(
+    n = n_i,
+    sampling_rate = 1,
+    I_empirical = mi_emp$mi,
+    r_eff = mi_emp$r_eff
+  )
+}
+cell_empirical &lt;- do.call(rbind, empirical_cell_rows)
+
+c_ref &lt;- rna_fit$c_X
+cell_by_umi &lt;- do.call(rbind, lapply(rho_grid, function(rho) {
+  q_df &lt;- unique(umi_scaling$scaling[umi_scaling$scaling$sampling_rate == rho,
+                                    c(&quot;rank&quot;, &quot;q_X_rate_hat&quot;)])
+  q_df &lt;- q_df[order(q_df$rank), ]
+  d2_rho &lt;- q_df$q_X_rate_hat[seq_len(r)] / c_ref
+  out &lt;- scscale_cell_scaling(d2_rho, p = rna_fit$p, n_grid = n_grid, theta_Y = theta_Y)
+  out &lt;- aggregate(I_theory ~ n + c_X, data = out, FUN = unique)
+  out$sampling_rate &lt;- rho
+  out
+}))
+
+empirical_grid &lt;- expand.grid(
+  sampling_rate = rho_grid,
+  n = n_grid,
+  KEEP.OUT.ATTRS = FALSE
+)
+empirical_grid &lt;- empirical_grid[order(empirical_grid$sampling_rate, empirical_grid$n), ]
+empirical_strat_rows &lt;- vector(&quot;list&quot;, nrow(empirical_grid))
+for (i in seq_len(nrow(empirical_grid))) {
+  rho &lt;- empirical_grid$sampling_rate[i]
+  n_i &lt;- empirical_grid$n[i]
+  cells &lt;- cell_order[seq_len(n_i)]
+  rna_sub &lt;- rna_counts[, cells, drop = FALSE]
+  if (rho &lt; 1) {
+    rna_sub &lt;- scscale_downsample_counts_fraction(rna_sub, fraction = rho, seed = 464378 + i)
+  }
+  mi_emp &lt;- scscale_empirical_mi(
+    rna_sub,
+    adt_counts[, cells, drop = FALSE],
+    r = r
+  )
+  empirical_strat_rows[[i]] &lt;- data.frame(
+    sampling_rate = rho,
+    n = n_i,
+    I_empirical = mi_emp$mi,
+    r_eff = mi_emp$r_eff
+  )
+}
+cell_by_umi_empirical &lt;- do.call(rbind, empirical_strat_rows)
+
+cell_full
+</code></pre>
+<pre><code>##      n       c_X I_theory sampling_rate
+## 1 4000 0.5000000 16.76075             1
+## 2 3000 0.6666667 17.55153             1
+## 3 2000 1.0000000 18.49024             1
+## 4 1000 2.0000000 19.64100             1
+## 5  500 4.0000000 20.32923             1
+</code></pre>
+<pre><code class="language-r">cell_empirical
+</code></pre>
+<pre><code>##      n sampling_rate I_empirical r_eff
+## 1  500             1    5.135318    12
+## 2 1000             1    5.594447    12
+## 3 2000             1    5.756927    12
+## 4 3000             1    5.699894    12
+## 5 4000             1    5.740955    12
+</code></pre>
+<pre><code class="language-r">cell_by_umi
+</code></pre>
+<pre><code>##       n       c_X I_theory sampling_rate
+## 1  4000 0.5000000 11.24177          0.35
+## 2  3000 0.6666667 12.39050          0.35
+## 3  2000 1.0000000 13.95784          0.35
+## 4  1000 2.0000000 16.34525          0.35
+## 5   500 4.0000000 18.19252          0.35
+## 6  4000 0.5000000 12.32080          0.50
+## 7  3000 0.6666667 13.44318          0.50
+## 8  2000 1.0000000 14.94036          0.50
+## 9  1000 2.0000000 17.13591          0.50
+## 10  500 4.0000000 18.75148          0.50
+## 11 4000 0.5000000 13.38902          0.70
+## 12 3000 0.6666667 14.46642          0.70
+## 13 2000 1.0000000 15.86913          0.70
+## 14 1000 2.0000000 17.84576          0.70
+## 15  500 4.0000000 19.22865          0.70
+## 16 4000 0.5000000 14.01333          0.85
+## 17 3000 0.6666667 15.05506          0.85
+## 18 2000 1.0000000 16.39089          0.85
+## 19 1000 2.0000000 18.22802          0.85
+## 20  500 4.0000000 19.47583          0.85
+## 21 4000 0.5000000 14.53359          1.00
+## 22 3000 0.6666667 15.53998          1.00
+## 23 2000 1.0000000 16.81347          1.00
+## 24 1000 2.0000000 18.52873          1.00
+## 25  500 4.0000000 19.66543          1.00
+</code></pre>
+<pre><code class="language-r">cell_by_umi_empirical
+</code></pre>
+<pre><code>##    sampling_rate    n I_empirical r_eff
+## 1           0.35  500    4.621387    12
+## 2           0.35 1000    5.126552    12
+## 3           0.35 2000    5.315972    12
+## 4           0.35 3000    5.252520    12
+## 5           0.35 4000    5.338716    12
+## 6           0.50  500    4.911675    12
+## 7           0.50 1000    5.317390    12
+## 8           0.50 2000    5.490699    12
+## 9           0.50 3000    5.477162    12
+## 10          0.50 4000    5.545404    12
+## 11          0.70  500    5.023712    12
+## 12          0.70 1000    5.479269    12
+## 13          0.70 2000    5.625861    12
+## 14          0.70 3000    5.618650    12
+## 15          0.70 4000    5.641468    12
+## 16          0.85  500    5.054361    12
+## 17          0.85 1000    5.552764    12
+## 18          0.85 2000    5.714193    12
+## 19          0.85 3000    5.641594    12
+## 20          0.85 4000    5.694003    12
+## 21          1.00  500    5.135318    12
+## 22          1.00 1000    5.594447    12
+## 23          1.00 2000    5.756927    12
+## 24          1.00 3000    5.699894    12
+## 25          1.00 4000    5.740955    12
+</code></pre>
+<h2>Plots</h2>
+<pre><code class="language-r">rho_cols &lt;- setNames(
+  c(&quot;#0072B2&quot;, &quot;#D55E00&quot;, &quot;#009E73&quot;, &quot;#CC79A7&quot;, &quot;#E69F00&quot;),
+  as.character(rho_grid)
+)
+
+old_par &lt;- par(mfrow = c(3, 2), mar = c(4.2, 4.3, 2.5, 1))
+
+plot(
+  umi_plot$sampling_rate,
+  umi_plot$I_theory,
+  type = &quot;b&quot;,
+  pch = 16,
+  col = &quot;#0072B2&quot;,
+  ylim = range(c(umi_plot$I_theory, umi_plot$I_infinity)),
+  xlab = expression(&quot;Sampling rate &quot; * rho),
+  ylab = expression(I[theory]),
+  main = &quot;UMI scaling: theory&quot;
+)
+lines(umi_plot$sampling_rate, umi_plot$I_infinity, col = &quot;grey35&quot;, lwd = 2, lty = 2)
+legend(
+  &quot;bottomright&quot;,
+  legend = c(&quot;theory&quot;, expression(I[infinity])),
+  col = c(&quot;#0072B2&quot;, &quot;grey35&quot;),
+  pch = c(16, NA),
+  lwd = c(1, 2),
+  lty = c(1, 2),
+  bty = &quot;n&quot;
+)
+
+plot(
+  umi_plot$sampling_rate,
+  umi_plot$I_empirical,
+  type = &quot;b&quot;,
+  pch = 17,
+  col = &quot;#D55E00&quot;,
+  xlab = expression(&quot;Sampling rate &quot; * rho),
+  ylab = expression(I[empirical]),
+  main = &quot;UMI scaling: empirical&quot;
+)
+
+plot(
+  cell_full$n,
+  cell_full$I_theory,
+  type = &quot;b&quot;,
+  pch = 16,
+  col = &quot;#0072B2&quot;,
+  ylim = range(c(cell_full$I_theory, I_infinity)),
+  xlab = &quot;Cell number n&quot;,
+  ylab = expression(I[theory]),
+  main = &quot;Cell number scaling: theory&quot;
+)
+abline(h = I_infinity, col = &quot;grey35&quot;, lwd = 2, lty = 2)
+legend(
+  &quot;topright&quot;,
+  legend = c(&quot;theory&quot;, expression(I[infinity])),
+  col = c(&quot;#0072B2&quot;, &quot;grey35&quot;),
+  pch = c(16, NA),
+  lwd = c(1, 2),
+  lty = c(1, 2),
+  bty = &quot;n&quot;
+)
+
+plot(
+  cell_empirical$n,
+  cell_empirical$I_empirical,
+  type = &quot;b&quot;,
+  pch = 17,
+  col = &quot;#D55E00&quot;,
+  xlab = &quot;Cell number n&quot;,
+  ylab = expression(I[empirical]),
+  main = &quot;Cell number scaling: empirical&quot;
+)
+
+plot(
+  NA,
+  xlim = range(n_grid),
+  ylim = range(cell_by_umi$I_theory),
+  xlab = &quot;Cell number n&quot;,
+  ylab = expression(I[theory](n, rho)),
+  main = &quot;Cell number by UMI: theory&quot;
+)
+for (rho in rho_grid) {
+  key &lt;- as.character(rho)
+  df &lt;- cell_by_umi[cell_by_umi$sampling_rate == rho, ]
+  df &lt;- df[order(df$n), ]
+  lines(df$n, df$I_theory, col = rho_cols[key], lwd = 2)
+  points(df$n, df$I_theory, col = rho_cols[key], pch = 16)
+}
+legend(
+  &quot;topright&quot;,
+  legend = paste0(&quot;rho=&quot;, rho_grid),
+  col = rho_cols,
+  lwd = 2,
+  pch = 16,
+  bty = &quot;n&quot;
+)
+
+plot(
+  NA,
+  xlim = range(n_grid),
+  ylim = range(cell_by_umi_empirical$I_empirical),
+  xlab = &quot;Cell number n&quot;,
+  ylab = expression(I[empirical](n, rho)),
+  main = &quot;Cell number by UMI: empirical&quot;
+)
+for (rho in rho_grid) {
+  key &lt;- as.character(rho)
+  emp &lt;- cell_by_umi_empirical[cell_by_umi_empirical$sampling_rate == rho, ]
+  emp &lt;- emp[order(emp$n), ]
+  lines(emp$n, emp$I_empirical, col = rho_cols[key], lwd = 2)
+  points(emp$n, emp$I_empirical, col = rho_cols[key], pch = 16)
+}
+legend(
+  &quot;topright&quot;,
+  legend = paste0(&quot;rho=&quot;, rho_grid),
+  col = rho_cols,
+  lwd = 2,
+  pch = 16,
+  bty = &quot;n&quot;,
+  cex = 0.85
+)
+</code></pre>
+<p><img src="gse164378-rna-adt-mi_files/figure-html/plots-1.png" alt="plot of chunk plots" /></p>
+<pre><code class="language-r">par(old_par)
+</code></pre>
+</body></html>

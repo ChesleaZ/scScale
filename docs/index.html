@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>scScale Tutorials</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --text: #17202a;
+      --muted: #596779;
+      --border: #d8dee8;
+      --bg: #ffffff;
+      --soft: #f6f8fb;
+      --link: #075fb8;
+    }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.55;
+    }
+    main {
+      max-width: 860px;
+      margin: 48px auto;
+      padding: 0 24px;
+    }
+    h1 {
+      margin: 0 0 10px;
+      font-size: 2.2rem;
+      line-height: 1.15;
+    }
+    p {
+      margin: 0 0 24px;
+      color: var(--muted);
+    }
+    ul {
+      padding: 0;
+      margin: 28px 0 0;
+      list-style: none;
+      border-top: 1px solid var(--border);
+    }
+    li {
+      border-bottom: 1px solid var(--border);
+    }
+    a {
+      display: block;
+      padding: 18px 0;
+      color: var(--link);
+      text-decoration: none;
+      font-weight: 650;
+    }
+    a:hover {
+      text-decoration: underline;
+    }
+    span {
+      display: block;
+      margin-top: 3px;
+      color: var(--muted);
+      font-weight: 400;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>scScale Tutorials</h1>
+    <p>Worked examples for Gaussian spike fitting, UMI scaling, and RNA-ADT spectral mutual information.</p>
+    <ul>
+      <li>
+        <a href="tutorials/gse123025-scscale-fit.html">
+          GSE123025 Gaussian Spike Fit
+          <span>Bulk eigenvalue fit and spike model diagnostics.</span>
+        </a>
+      </li>
+      <li>
+        <a href="tutorials/gse123025-umi-scaling.html">
+          GSE123025 UMI Scaling
+          <span>Sequencing-depth scaling for RNA spike strengths.</span>
+        </a>
+      </li>
+      <li>
+        <a href="tutorials/gse164378-scscale-fit.html">
+          GSE164378 Gaussian Spike Fit
+          <span>RNA spike-model fit on the 4,000-cell CITE-seq example.</span>
+        </a>
+      </li>
+      <li>
+        <a href="tutorials/gse164378-umi-scaling.html">
+          GSE164378 UMI Scaling
+          <span>RNA UMI scaling on the matched CITE-seq example.</span>
+        </a>
+      </li>
+      <li>
+        <a href="tutorials/gse164378-rna-adt-mi.html">
+          GSE164378 RNA-ADT Mutual Information
+          <span>Theory and empirical MI scaling across UMI depth and cell number.</span>
+        </a>
+      </li>
+    </ul>
+  </main>
+</body>
+</html>
