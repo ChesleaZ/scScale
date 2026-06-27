@@ -1,14 +1,4 @@
 .DS_Store
-.Rhistory
-.RData
-.Rproj.user/
-__pycache__/
-*.py[cod]
-
-# R build/check artifacts.
-*.tar.gz
 *.Rcheck/
-
-# Local run outputs.
-outputs/
-data/
+*.tar.gz
+*_files/

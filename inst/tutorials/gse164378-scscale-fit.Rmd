@@ -1,0 +1,111 @@
+---
+title: "Gaussian Spike Model Fit With GSE164378 3' CITE-seq"
+output: html_document
+---
+
+This tutorial checks the Gaussian spike model fit on the RNA side of the
+package GSE164378 3' CITE-seq example. The example keeps 4,000 matched PBMC
+cells, 2,000 RNA HVGs, and all 228 ADT features.
+
+```{r setup, include=FALSE}
+library(scScale)
+data(gse164378_3p_citeseq_hvg)
+
+counts <- gse164378_3p_citeseq_hvg$rna_counts
+adt <- gse164378_3p_citeseq_hvg$adt_counts
+```
+
+## Fit Spike Model
+
+```{r fit-spike-model}
+fit <- scscale_fit(
+  counts,
+  r = 20,
+  fit_umi = FALSE,
+  mp_max_iter = 20,
+  mp_grid_n = 4000
+)
+
+data.frame(
+  p = fit$p,
+  n = fit$n,
+  c_X = fit$c_X,
+  selected_iteration = fit$bulk$selected_iteration,
+  stop_reason = fit$bulk$stop_reason,
+  tau2 = fit$bulk$tau2,
+  lambda_plus = fit$bulk$lambda_plus
+)
+
+fit$bulk$history[, c(
+  "iteration", "n_bulk", "tau2", "lambda_plus", "n_spikes",
+  "qq_rmse_log", "ks", "stop_metric_value"
+)]
+
+data.frame(
+  rank = fit$spikes$rank,
+  lambda = fit$spikes$lambda,
+  q_X = fit$spikes$q_X,
+  theta_X = fit$theta_X,
+  theta_infinity = fit$theta_infinity
+)
+```
+
+## Eigenvalue Fit
+
+```{r plot-spike-fit, fig.width=11, fig.height=3.7}
+lambda <- fit$spectrum$lambda
+bulk <- fit$bulk
+bulk_lambda <- lambda[bulk$bulk_index]
+bulk_lambda <- bulk_lambda[is.finite(bulk_lambda) & bulk_lambda > 0]
+mp_density <- getFromNamespace("scscale_mp_density", "scScale")
+mp_quantile <- getFromNamespace("scscale_mp_quantile", "scScale")
+
+mp_x <- seq(bulk$mp_lower, bulk$lambda_plus, length.out = 600)
+mp_y <- mp_density(mp_x, c_X = fit$c_X, tau2 = bulk$tau2)
+
+old_par <- par(mfrow = c(1, 3), mar = c(4.2, 4.2, 2.4, 1))
+hist(
+  bulk_lambda,
+  breaks = 60,
+  freq = FALSE,
+  col = "grey85",
+  border = "white",
+  xlab = expression(lambda),
+  main = "Bulk eigenvalues"
+)
+lines(mp_x, mp_y, col = "#D55E00", lwd = 2)
+abline(v = bulk$lambda_plus, col = "#D55E00", lty = 2)
+
+hist(
+  log10(bulk_lambda),
+  breaks = 60,
+  freq = FALSE,
+  col = "grey85",
+  border = "white",
+  xlab = expression(log[10](lambda)),
+  main = "Log bulk eigenvalues"
+)
+abline(v = log10(bulk$lambda_plus), col = "#D55E00", lty = 2)
+
+emp_q <- sort(bulk_lambda)
+theory_q <- vapply(
+  ppoints(length(emp_q)),
+  mp_quantile,
+  numeric(1),
+  c_X = fit$c_X,
+  tau2 = bulk$tau2,
+  grid_n = 4000
+)
+plot(
+  theory_q,
+  emp_q,
+  pch = 16,
+  cex = 0.45,
+  col = "#0072B2",
+  xlab = "MP theoretical quantile",
+  ylab = "Empirical bulk quantile",
+  main = "Bulk QQ"
+)
+abline(0, 1, col = "#D55E00", lwd = 2)
+par(old_par)
+```

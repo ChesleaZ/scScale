@@ -5,18 +5,20 @@ Authors@R:
     person("Jingyuan", "Hu", role = c("aut", "cre"), email = "jingyuanhu@example.com")
 Author: Jingyuan Hu [aut, cre]
 Maintainer: Jingyuan Hu <jingyuanhu@example.com>
-Description: Single-cell scaling law utilities for empirical task scores,
-    spectral mutual information, median Marchenko-Pastur noise calibration,
-    BBP spike inversion, and batch-effect scaling analyses.
+Description: Median Marchenko-Pastur noise calibration, BBP spike inversion,
+    spectral overlap, and task-difficulty utilities for single-cell scaling
+    analyses, aligned with ChesleaZ/scScale.
 License: MIT + file LICENSE
 URL: https://github.com/ChesleaZ/scScale
 BugReports: https://github.com/ChesleaZ/scScale/issues
 Encoding: UTF-8
+Depends:
+    R (>= 2.10),
+    Matrix
+LazyData: true
+LazyDataCompression: xz
 Suggests:
     irlba,
-    knitr,
-    Matrix,
-    rmarkdown,
     SeuratObject
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.2

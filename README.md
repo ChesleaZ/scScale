@@ -1,115 +1,58 @@
 # scScale
 
-`scScale` is an R package for single-cell scaling-law analyses. It includes
-median Marchenko-Pastur noise calibration, BBP spike inversion, spectral mutual
-information utilities, and batch-effect scaling-law fits.
+Small R package for object-style single-cell scaling-law analysis.
 
-## Installation
+The public workflow is intentionally narrow:
 
-Install the development version from GitHub:
-
-```r
-install.packages("remotes")
-remotes::install_github("ChesleaZ/scScale")
-```
-
-You can also install with `pak`:
-
-```r
-install.packages("pak")
-pak::pak("ChesleaZ/scScale")
-```
-
-## Quick Start
+1. `scscale_fit()` fits the Gaussian spike model for one feature-by-cell matrix.
+2. `scscale_mi()` uses a second fitted object as the target and computes
+   spectral mutual information, optionally across cell-number and UMI grids.
 
 ```r
 library(scScale)
+data(gse164378_3p_citeseq_hvg)
 
-ref_ev <- find_eigenvalues(ref_counts, n_features = 2000)
-cur_ev <- find_eigenvalues(cur_counts, n_features = 2000)
+rna <- gse164378_3p_citeseq_hvg$rna_counts
+adt <- gse164378_3p_citeseq_hvg$adt_counts
 
-ref_noise <- fit_noise(ref_ev)
-ref <- fit_spikes(ref_ev, noise = ref_noise, r = 5)
-cur <- fit_spikes(cur_ev, noise = ref_noise, r = 5)
-
-mi_theory(cur, ref, side = "cells", r = 5)$mi
-```
-
-If eigenvalues are already precomputed:
-
-```r
-fit <- mi_theory_from_eigenvalues(
-  cur_eigenvalues = cur_mu,
-  ref_eigenvalues = ref_mu,
-  n_cur = 600,
-  p_cur = 300,
-  side = "cells",
-  r = 5
-)
-```
-
-Batch-effect scaling fits can be run from replicate summaries:
-
-```r
-summary_df <- data.frame(
-  m_batch = c(2, 3, 5, 8, 12),
-  mean_I_bio_norm = c(0.12, 0.15, 0.18, 0.20, 0.215)
+rna_fit <- scscale_fit(
+  rna,
+  r = 12,
+  fit_umi = TRUE,
+  sampling_rates = c(0.10, 0.20, 0.35, 0.50, 0.70, 0.85, 1.00)
 )
 
-fit_batch_effect_scaling(summary_df, law = "batch_number", min_points = 4)
+adt_fit <- scscale_fit(adt, r = 12, fit_umi = FALSE)
+
+mi <- scscale_mi(
+  rna_fit,
+  adt_fit,
+  n_grid = c(500, 1000, 2000, 3000, 4000),
+  sampling_rates = c(0.35, 0.50, 0.70, 0.85, 1.00)
+)
+
+mi$I_theory
+mi$I_infinity
+mi$grid
 ```
 
-Empirical task scores can be computed against discrete or numeric cell-level
-targets:
+`scscale_fit()` returns the fitted spectrum, MP bulk fit, spike table, finite
+recoverability `theta_X`, infinite-cell recoverability `theta_infinity`, and
+optionally UMI scaling. The spike table contains the fitted `d2_X`, `q_X`, MP
+edge, and related parameters.
+
+The package examples are:
+
+- `gse164378_3p_citeseq_hvg`: 4,000 matched 3' CITE-seq PBMC cells with 2,000
+  RNA HVGs and 228 ADT features.
+- `gse123025_myeloid_hvg`: 2,000 HVGs by 1,922 myeloid cells for a compact RNA
+  spike-model example.
+
+Tutorials are available under:
 
 ```r
-x <- matrix(rnorm(2000), nrow = 100)  # features x cells
-colnames(x) <- paste0("cell", seq_len(ncol(x)))
-
-labels <- rep(c("A", "B"), length.out = ncol(x))
-names(labels) <- colnames(x)
-empirical_mi(x, labels, r = 5)$mi
-discrete_vector_empirical_mi(x, labels, r = 5)$mi
-
-score <- rnorm(ncol(x))
-names(score) <- colnames(x)
-numeric_vector_empirical_mi(x, score, r = 5)$mi
+system.file("tutorials", package = "scScale")
 ```
 
-## Command Line
-
-From precomputed eigenvalues:
-
-```bash
-Rscript inst/scripts/run_from_eigenvalues.R \
-  --cur-eigenvalues=cur.csv \
-  --ref-eigenvalues=ref.csv \
-  --n-cur=600 \
-  --p-cur=300 \
-  --side=cells \
-  --out-dir=outputs/scscale_spectral_mi
-```
-
-From count CSVs:
-
-```bash
-Rscript inst/scripts/run_from_eigenvalues.R \
-  --cur-counts=cur_counts.csv \
-  --ref-counts=ref_counts.csv \
-  --n-features=2000 \
-  --transform=pearson \
-  --side=cells \
-  --out-dir=outputs/scscale_spectral_mi
-```
-
-## Tutorials
-
-Rendered tutorials are available on the GitHub Pages site:
-
-- [Tutorial index](https://chesleaz.github.io/scScale/scScale-tutorial.html)
-- [Cell-number scaling law](https://chesleaz.github.io/scScale/cell-number-scaling-law.html)
-- [UMI scaling law](https://chesleaz.github.io/scScale/umi-scaling-law.html)
-- [Batch-number scaling law](https://chesleaz.github.io/scScale/batch-number-scaling-law.html)
-
-The source files are in [`docs/`](docs/), and the local entry point is
-[`docs/index.html`](docs/index.html).
+The older eigenvalue-first API is kept locally under `local/legacy_scScale/`
+for provenance, but is no longer part of the GitHub package surface.
