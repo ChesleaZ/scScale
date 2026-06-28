@@ -44,8 +44,6 @@ spike fitting, UMI scaling, and CITE-seq mutual information.
 
 - `gse164378_3p_citeseq_hvg`: 4,000 matched 3' CITE-seq PBMC cells with 2,000
   RNA HVGs and 228 ADT features.
-- `gse123025_myeloid_hvg`: 2,000 HVGs by 1,922 myeloid cells for a compact RNA
-  spike-model example.
 
 ## Documentation
 
