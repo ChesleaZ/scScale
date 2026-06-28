@@ -29,6 +29,10 @@ pak::pak("ChesleaZ/scScale")
 
 ## Tutorials
 
+Hosted tutorials are available at:
+
+[https://chesleaz.github.io/scScale/](https://chesleaz.github.io/scScale/)
+
 The worked examples live in the installed package tutorials:
 
 ```r
@@ -46,6 +50,8 @@ spike fitting, UMI scaling, and CITE-seq mutual information.
   RNA HVGs and 228 ADT features.
 
 ## Documentation
+
+[PDF documentation](https://chesleaz.github.io/scScale/scScale-manual.pdf)
 
 ```r
 system.file("doc/scScale-manual.pdf", package = "scScale")
