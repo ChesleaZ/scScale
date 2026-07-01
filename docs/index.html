@@ -11,8 +11,8 @@
       --muted: #596779;
       --border: #d8dee8;
       --bg: #ffffff;
-      --soft: #f6f8fb;
       --link: #075fb8;
+      --code-bg: #f6f8fb;
     }
     body {
       margin: 0;
@@ -35,12 +35,34 @@
       margin: 0 0 24px;
       color: var(--muted);
     }
-    .doc-link {
-      display: inline-block;
-      margin: 0 0 10px;
-      padding: 0;
-      color: var(--link);
-      font-weight: 650;
+    h2 {
+      margin: 34px 0 10px;
+      font-size: 1.25rem;
+    }
+    .links {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 12px;
+      margin: 26px 0 12px;
+    }
+    .links a {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 16px;
+    }
+    pre {
+      margin: 16px 0 24px;
+      padding: 16px;
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--code-bg);
+      color: var(--text);
+      font-size: 0.92rem;
+      line-height: 1.45;
+    }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     }
     ul {
       padding: 0;
@@ -71,9 +93,37 @@
 </head>
 <body>
   <main>
-    <h1>scScale Tutorials</h1>
-    <p>Worked CITE-seq examples for Gaussian spike fitting, UMI scaling, and RNA-ADT spectral mutual information.</p>
-    <a class="doc-link" href="scScale-manual.pdf">PDF documentation</a>
+    <h1>scScale</h1>
+    <p>Gaussian-spike scaling laws for matched single-cell modalities, using one low-rank subspace-alignment mutual information formula.</p>
+
+    <div class="links">
+      <a href="tutorials/gse164378-rna-adt-mi.html">
+        Minimal RNA-ADT Tutorial
+        <span>UMI scaling, cell-number scaling, joint scaling, and empirical MI.</span>
+      </a>
+      <a href="scScale-manual.pdf">
+        Package Manual PDF
+        <span>Function reference for the current package API.</span>
+      </a>
+      <a href="https://github.com/ChesleaZ/scScale">
+        Source Code
+        <span>Install and inspect the package on GitHub.</span>
+      </a>
+    </div>
+
+    <h2>Core Workflow</h2>
+    <pre><code>library(scScale)
+
+pair <- scscale_pair_fit(rna_counts, adt_counts)
+
+umi <- scscale_umi_mi(pair, rna_counts, sampling_rates = c(0.25, 0.5, 1))
+cells <- scscale_cell_number_mi(pair, n_grid = c(500, 1000, 2000, 4000))
+joint <- scscale_cell_number_by_umi_mi(pair, umi, n_grid = c(500, 1000, 2000, 4000))
+
+empirical <- scscale_empirical_mi(rna_counts, adt_counts)</code></pre>
+
+    <h2>Tutorials</h2>
+    <p>The current RNA-ADT tutorial is the recommended entry point. Older diagnostics remain available for provenance and deeper checks.</p>
     <ul>
       <li>
         <a href="tutorials/gse164378-scscale-fit.html">
@@ -90,7 +140,31 @@
       <li>
         <a href="tutorials/gse164378-rna-adt-mi.html">
           GSE164378 RNA-ADT Mutual Information
-          <span>Theory and empirical MI scaling across UMI depth and cell number.</span>
+          <span>Minimal package workflow for theory and empirical MI scaling.</span>
+        </a>
+      </li>
+      <li>
+        <a href="tutorials/gse164378-umi-mi-diagnostics.html">
+          GSE164378 UMI-MI Diagnostics
+          <span>Checks for refitted UMI theory, subspace alignment, and MI bounds.</span>
+        </a>
+      </li>
+      <li>
+        <a href="tutorials/gse164378-rna-adt-debug.html">
+          GSE164378 RNA-ADT Debug Notes
+          <span>Intermediate diagnostics for the paired RNA-ADT MI analysis.</span>
+        </a>
+      </li>
+      <li>
+        <a href="tutorials/gse164378-c1-spectrum-fit.html">
+          GSE164378 C1 Spectrum Fit
+          <span>Alternate spectrum-fit diagnostics for the C1 example.</span>
+        </a>
+      </li>
+      <li>
+        <a href="tutorials/gse164378-mp-spacing-gamma.html">
+          GSE164378 MP Spacing Gamma
+          <span>MP spacing and gamma diagnostics used during spike-fit development.</span>
         </a>
       </li>
     </ul>

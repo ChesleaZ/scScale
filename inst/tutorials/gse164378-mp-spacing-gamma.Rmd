@@ -1,24 +1,23 @@
 ---
-title: "Gaussian Spike Model Fit With GSE164378 3' CITE-seq"
+title: "GSE164378 Robust Spike-Bulk Fit"
 output: html_document
 ---
 
-This tutorial checks the Gaussian spike model fit on the RNA side of the
-package GSE164378 3' CITE-seq example. The example keeps 4,000 matched PBMC
-cells, 2,000 RNA HVGs, and all 228 ADT features.
+This diagnostic page uses the package spike fit directly. The bulk scale is
+anchored by the MP median, while the spike boundary is proposed by a robust
+MAD-standardized log-eigengap rule.
 
-```{r setup, include=FALSE}
+```{r setup}
 library(scScale)
 data(gse164378_3p_citeseq_hvg)
 
 counts <- gse164378_3p_citeseq_hvg$rna_counts
-adt <- gse164378_3p_citeseq_hvg$adt_counts
 count_transform <- "log1p_cpm"
 ```
 
-## Fit Spike Model
+## Fit
 
-```{r fit-spike-model}
+```{r fit}
 fit <- scscale_fit(
   counts,
   count_transform = count_transform,
@@ -32,13 +31,24 @@ data.frame(
   n = fit$n,
   c_X = fit$c_X,
   method = fit$bulk$method,
-  n_spikes = sum(fit$spikes$is_spike)
+  selected_K = sum(fit$spikes$is_spike),
+  stop_reason = fit$bulk$stop_reason,
+  tau2 = fit$bulk$tau2,
+  lambda_plus = fit$bulk$lambda_plus,
+  selected_gap_z = fit$bulk$history$gap_z[fit$bulk$selected_iteration],
+  central_qq_loss = fit$bulk$history$central_qq_loss[fit$bulk$selected_iteration]
 )
+
+fit$bulk$history[fit$bulk$history$K %in% c(1:80, 200:230, fit$bulk$selected_iteration), c(
+  "K", "n_bulk", "n_spikes", "tau2", "lambda_plus",
+  "log_gap", "background_gap_median", "background_gap_mad",
+  "gap_z", "central_qq_loss"
+)]
 ```
 
-## Eigenvalue Fit
+## Diagnostic Plots
 
-```{r plot-spike-fit, fig.width=11, fig.height=8}
+```{r plots, fig.width=11, fig.height=8}
 lambda <- fit$spectrum$lambda
 bulk <- fit$bulk
 bulk_lambda <- lambda[bulk$bulk_index]
@@ -48,10 +58,11 @@ spike_lambda <- spike_lambda[is.finite(spike_lambda) & spike_lambda > 0]
 mp_density <- getFromNamespace("scscale_mp_density", "scScale")
 mp_quantile <- getFromNamespace("scscale_mp_quantile_grid", "scScale")
 
-mp_x <- seq(bulk$mp_lower, bulk$lambda_plus, length.out = 600)
+mp_x <- seq(bulk$mp_lower, bulk$lambda_plus, length.out = 700)
 mp_y <- mp_density(mp_x, c_X = fit$c_X, tau2 = bulk$tau2)
 
 old_par <- par(mfrow = c(2, 2), mar = c(4.2, 4.2, 2.6, 1))
+
 plot(
   seq_along(lambda),
   lambda,
@@ -103,5 +114,6 @@ hist(
 )
 abline(v = log10(bulk$lambda_plus), col = "#D55E00", lty = 2)
 rug(log10(spike_lambda), col = "#D55E00", lwd = 1)
+
 par(old_par)
 ```

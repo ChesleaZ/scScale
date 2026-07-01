@@ -1,0 +1,157 @@
+---
+title: "GSE164378 c=1 Spectrum Fit"
+output: html_document
+---
+
+This report isolates the potentially troublesome square case with exactly
+2,000 genes and 2,000 cells. It uses the package GSE164378 3' CITE-seq RNA
+example, keeps all 2,000 HVGs, samples 2,000 cells, applies the package default
+log-normalized centered preprocessing, and fits the Gaussian spike / MP bulk.
+
+```{r setup}
+library(scScale)
+data(gse164378_3p_citeseq_hvg)
+
+counts_full <- gse164378_3p_citeseq_hvg$rna_counts
+stopifnot(nrow(counts_full) == 2000)
+
+set.seed(164378)
+cells <- sample(colnames(counts_full), 2000)
+counts <- counts_full[, cells, drop = FALSE]
+
+dim(counts)
+```
+
+## Fit
+
+```{r fit}
+fit <- scscale_fit(
+  counts,
+  r = 30,
+  fit_umi = FALSE,
+  mp_max_iter = 30,
+  mp_grid_n = 5000,
+  store_matrix = TRUE
+)
+
+summary_table <- data.frame(
+  p = fit$p,
+  n = fit$n,
+  c_X = fit$c_X,
+  normalization = fit$normalization$method,
+  target_depth = fit$normalization$target_depth,
+  center = fit$normalization$center,
+  scale = fit$normalization$scale,
+  selected_iteration = fit$bulk$selected_iteration,
+  stop_reason = fit$bulk$stop_reason,
+  tau2 = fit$bulk$tau2,
+  lambda_plus = fit$bulk$lambda_plus,
+  n_bulk = length(fit$bulk$bulk_index),
+  n_spikes = length(fit$bulk$spike_index)
+)
+
+summary_table
+fit$bulk$history[, c(
+  "iteration", "n_bulk", "n_spikes", "tau2", "lambda_plus",
+  "qq_rmse_log", "ks", "neg_log_likelihood", "support_fraction",
+  "stop_metric_value"
+)]
+```
+
+## Top Eigenvalues
+
+```{r top-eigenvalues}
+head(
+  fit$spikes[, c(
+    "rank", "lambda", "lambda_tilde", "is_spike", "d2_X", "q_X",
+    "lambda_plus"
+  )],
+  30
+)
+```
+
+## Spectrum Fit
+
+```{r spectrum-plots, fig.width=12, fig.height=8}
+lambda <- fit$spectrum$lambda
+bulk <- fit$bulk
+bulk_lambda <- lambda[bulk$bulk_index]
+bulk_lambda <- bulk_lambda[is.finite(bulk_lambda) & bulk_lambda > 0]
+spike_lambda <- lambda[bulk$spike_index]
+
+mp_density <- getFromNamespace("scscale_mp_density", "scScale")
+mp_quantile <- getFromNamespace("scscale_mp_quantile", "scScale")
+
+mp_x <- seq(max(bulk$mp_lower, 0), bulk$lambda_plus, length.out = 800)
+mp_y <- mp_density(mp_x, c_X = fit$c_X, tau2 = bulk$tau2)
+
+old_par <- par(mfrow = c(2, 2), mar = c(4.2, 4.4, 2.6, 1))
+
+hist(
+  bulk_lambda,
+  breaks = 70,
+  freq = FALSE,
+  col = "grey85",
+  border = "white",
+  xlab = expression(lambda),
+  main = "Bulk eigenvalues"
+)
+lines(mp_x, mp_y, col = "#D55E00", lwd = 2)
+abline(v = bulk$lambda_plus, col = "#D55E00", lty = 2)
+rug(spike_lambda, col = "#0072B2", lwd = 2)
+legend(
+  "topright",
+  legend = c("MP density", expression(lambda["+"]), "spikes"),
+  col = c("#D55E00", "#D55E00", "#0072B2"),
+  lwd = c(2, 1, 2),
+  lty = c(1, 2, 1),
+  bty = "n"
+)
+
+hist(
+  log10(bulk_lambda),
+  breaks = 70,
+  freq = FALSE,
+  col = "grey85",
+  border = "white",
+  xlab = expression(log[10](lambda)),
+  main = "Log bulk eigenvalues"
+)
+abline(v = log10(bulk$lambda_plus), col = "#D55E00", lty = 2)
+
+emp_q <- sort(bulk_lambda)
+theory_q <- vapply(
+  ppoints(length(emp_q)),
+  mp_quantile,
+  numeric(1),
+  c_X = fit$c_X,
+  tau2 = bulk$tau2,
+  grid_n = 5000
+)
+plot(
+  theory_q,
+  emp_q,
+  pch = 16,
+  cex = 0.45,
+  col = "#0072B2",
+  xlab = "MP theoretical quantile",
+  ylab = "Empirical bulk quantile",
+  main = "Bulk QQ"
+)
+abline(0, 1, col = "#D55E00", lwd = 2)
+
+plot(
+  fit$bulk$history$iteration,
+  fit$bulk$history$qq_rmse_log,
+  type = "b",
+  pch = 16,
+  col = "#0072B2",
+  xlab = "Iteration",
+  ylab = "QQ RMSE, log scale",
+  main = "Bulk goodness across iterations"
+)
+abline(v = fit$bulk$selected_iteration, col = "#D55E00", lty = 2)
+
+par(old_par)
+```
+

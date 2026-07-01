@@ -38,11 +38,50 @@ scscale_downsample_counts_fraction <- function(counts, fraction, seed = NULL) {
   out
 }
 
-scscale_information_from_theta <- function(theta_X, theta_Y, eps = 1e-12) {
+scscale_low_rank_mi <- function(theta_X, theta_Y, P = NULL, eps = 1e-12) {
   m <- min(length(theta_X), length(theta_Y))
-  if (m < 1L) return(0)
-  theta_double <- pmin(pmax(theta_X[seq_len(m)] * theta_Y[seq_len(m)], 0), 1 - eps)
-  -0.5 * sum(log1p(-theta_double))
+  if (is.null(P)) {
+    if (m < 1L) {
+      return(list(mi = 0, I_theory = 0, sigma = numeric(0), gamma = numeric(0), r_X = 0L, r_Y = 0L))
+    }
+    gamma <- pmin(pmax(theta_X[seq_len(m)] * theta_Y[seq_len(m)], 0), 1 - eps)
+    mi <- -0.5 * sum(log1p(-gamma))
+    return(list(mi = mi, I_theory = mi, sigma = sqrt(gamma), gamma = gamma, r_X = m, r_Y = m))
+  }
+
+  P <- as_dense_matrix(P)
+  r_X <- min(length(theta_X), nrow(P))
+  r_Y <- min(length(theta_Y), ncol(P))
+  if (r_X < 1L || r_Y < 1L) {
+    return(list(mi = 0, I_theory = 0, sigma = numeric(0), gamma = numeric(0), r_X = r_X, r_Y = r_Y))
+  }
+  theta_X <- pmin(pmax(theta_X[seq_len(r_X)], 0), 1 - eps)
+  theta_Y <- pmin(pmax(theta_Y[seq_len(r_Y)], 0), 1 - eps)
+  M <- sweep(P[seq_len(r_X), seq_len(r_Y), drop = FALSE], 1, sqrt(theta_X), "*")
+  M <- sweep(M, 2, sqrt(theta_Y), "*")
+  sigma <- svd(M, nu = 0, nv = 0)$d
+  gamma <- pmin(pmax(sigma^2, 0), 1 - eps)
+  mi <- -0.5 * sum(log1p(-gamma))
+  list(mi = mi, I_theory = mi, sigma = sigma, gamma = gamma, r_X = r_X, r_Y = r_Y, P = P[seq_len(r_X), seq_len(r_Y), drop = FALSE])
+}
+
+scscale_subspace_overlap_matrix <- function(z_X, z_Y) {
+  z_X <- as_dense_matrix(z_X)
+  z_Y <- as_dense_matrix(z_Y)
+  if (!is.null(rownames(z_X)) && !is.null(rownames(z_Y))) {
+    common_cells <- intersect(rownames(z_X), rownames(z_Y))
+    if (length(common_cells) < 2L) {
+      stop("z_X and z_Y must share at least two cells.", call. = FALSE)
+    }
+    z_X <- z_X[common_cells, , drop = FALSE]
+    z_Y <- z_Y[common_cells, , drop = FALSE]
+  }
+  if (nrow(z_X) != nrow(z_Y)) {
+    stop("z_X and z_Y must have the same number of rows/cells.", call. = FALSE)
+  }
+  q_X <- qr.Q(qr(z_X))
+  q_Y <- qr.Q(qr(z_Y))
+  crossprod(q_X, q_Y)
 }
 
 scscale_umi_scaling <- function(
@@ -51,17 +90,22 @@ scscale_umi_scaling <- function(
   sampling_rates = NULL,
   r = 10,
   target_depth = 1e4,
+  count_transform = c("log1p_cpm", "pearson_residual", "log1p"),
+  center = TRUE,
+  scale = FALSE,
   n_features = NULL,
   min_cells = 10,
   seed = 1,
   n_replicates = 1,
   theta_Y = NULL,
+  P = NULL,
   reference_fit = NULL,
   empirical = TRUE,
   use_irlba = TRUE,
-  mp_max_iter = 50,
+  mp_max_iter = 300,
   mp_grid_n = 20000
 ) {
+  count_transform <- match.arg(count_transform)
   if (is.null(U_grid) && is.null(sampling_rates)) {
     stop("Provide U_grid or sampling_rates.", call. = FALSE)
   }
@@ -83,8 +127,17 @@ scscale_umi_scaling <- function(
   if (is.null(rownames(counts))) rownames(counts) <- paste0("feature_", seq_len(nrow(counts)))
   if (is.null(colnames(counts))) colnames(counts) <- paste0("cell_", seq_len(ncol(counts)))
 
-  features <- rownames(counts)
-  if (!is.null(n_features)) {
+  features <- if (!is.null(reference_fit) && inherits(reference_fit, "scscale_fit") &&
+    !is.null(reference_fit$features)) {
+    missing_features <- setdiff(reference_fit$features, rownames(counts))
+    if (length(missing_features)) {
+      stop("counts is missing ", length(missing_features), " reference features.", call. = FALSE)
+    }
+    reference_fit$features
+  } else {
+    rownames(counts)
+  }
+  if (is.null(reference_fit) && !is.null(n_features)) {
     features <- select_hvgs(counts, n_features = n_features, min_cells = min_cells)
   }
   counts <- counts[features, , drop = FALSE]
@@ -98,6 +151,9 @@ scscale_umi_scaling <- function(
       counts,
       input = "counts",
       target_depth = target_depth,
+      count_transform = count_transform,
+      center = center,
+      scale = scale,
       r = r,
       mp_max_iter = mp_max_iter,
       mp_grid_n = mp_grid_n,
@@ -114,8 +170,9 @@ scscale_umi_scaling <- function(
       counts,
       input = "counts",
       target_depth = target_depth,
-      center = TRUE,
-      scale = TRUE
+      count_transform = count_transform,
+      center = center,
+      scale = scale
     )
     X_ref <- prepared_ref$matrix
   }
@@ -145,7 +202,13 @@ scscale_umi_scaling <- function(
       } else {
         counts_U <- scscale_downsample_counts_fraction(counts, fraction = sampling_rate, seed = replicate_seed)
       }
-      X_U <- scscale_normalize_counts(counts_U, target_depth = target_depth, center = TRUE, scale = TRUE)
+      X_U <- scscale_normalize_counts(
+        counts_U,
+        target_depth = target_depth,
+        count_transform = count_transform,
+        center = center,
+        scale = scale
+      )
       fit_U <- scscale_fit(
         X_U,
         input = "normalized",
@@ -164,8 +227,8 @@ scscale_umi_scaling <- function(
       q_X <- fit_U$c_X * d2_X
       theta_X <- scscale_recoverability(q_X, c_X = fit_U$c_X)
       theta_X_infinity <- scscale_theta_infinity(q_X)
-      I_theory <- scscale_information_from_theta(theta_X, theta_Y)
-      I_infinity <- scscale_information_from_theta(theta_X_infinity, theta_Y)
+      I_theory <- scscale_low_rank_mi(theta_X, theta_Y, P = P)$mi
+      I_infinity <- scscale_low_rank_mi(theta_X_infinity, theta_Y, P = P)$mi
       empirical_overlap <- NULL
       gamma_empirical <- rep(NA_real_, r_eff)
       I_empirical <- NA_real_
@@ -268,6 +331,7 @@ scscale_umi_scaling <- function(
     q_total_rate_fit = q_total_rate_fit,
     reference_fit = reference_fit,
     theta_Y = theta_Y,
+    P = P,
     U_grid = U_grid,
     sampling_rates = sampling_rates,
     r = r_eff,
@@ -283,11 +347,14 @@ scscale_cell_scaling <- function(
   p,
   n_grid,
   theta_Y,
-  eps = 1e-12
+  P = NULL,
+  eps = 1e-12,
+  parameter = c("q", "d2")
 ) {
+  parameter <- match.arg(parameter)
   if (inherits(d2_X, "scscale_fit")) {
     fit <- d2_X
-    d2_X <- fit$spikes$d2_X
+    d2_X <- if (identical(parameter, "q")) fit$spikes$q_X else fit$spikes$d2_X
     p <- p %||% fit$p
   }
   if (missing(p) || is.null(p)) stop("p is required.", call. = FALSE)
@@ -295,14 +362,20 @@ scscale_cell_scaling <- function(
 
   rows <- lapply(n_grid, function(n) {
     c_X <- p / n
-    q_X <- c_X * d2_X
+    if (identical(parameter, "q")) {
+      q_X <- d2_X
+      d2_n <- q_X / c_X
+    } else {
+      d2_n <- d2_X
+      q_X <- c_X * d2_n
+    }
     theta_X <- scscale_recoverability(q_X, c_X = c_X)
     data.frame(
       n = n,
       c_X = c_X,
-      I_theory = scscale_information_from_theta(theta_X, theta_Y, eps = eps),
+      I_theory = scscale_low_rank_mi(theta_X, theta_Y, P = P, eps = eps)$mi,
       rank = seq_along(q_X),
-      d2_X = d2_X,
+      d2_X = d2_n,
       q_X = q_X,
       theta_X = theta_X
     )

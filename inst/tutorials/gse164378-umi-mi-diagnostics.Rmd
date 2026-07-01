@@ -1,0 +1,202 @@
+---
+title: "GSE164378 UMI Scaling Diagnostics"
+output: html_document
+---
+
+This page isolates the UMI-depth behavior for the GSE164378 3' CITE-seq
+example. It refits the RNA spike model at each UMI sampling rate, shows the MP
+bulk fit, tracks the detected spike count, and compares theoretical and
+empirical RNA-ADT MI.
+
+```{r setup}
+library(scScale)
+data(gse164378_3p_citeseq_hvg)
+
+rna_counts <- gse164378_3p_citeseq_hvg$rna_counts
+adt_counts <- gse164378_3p_citeseq_hvg$adt_counts
+
+count_transform <- "log1p_cpm"
+sampling_rates <- c(0.10, 0.20, 0.35, 0.50, 0.70, 0.85, 1.00)
+r_theory_cap <- 12
+r_empirical <- 12
+
+mp_density <- getFromNamespace("scscale_mp_density", "scScale")
+
+dim(rna_counts)
+dim(adt_counts)
+```
+
+## Target Side
+
+```{r fit-target}
+adt_fit <- scscale_fit(
+  adt_counts,
+  count_transform = count_transform,
+  fit_umi = FALSE,
+  mp_max_iter = 300,
+  mp_grid_n = 3000,
+  store_matrix = TRUE
+)
+
+r_Y <- sum(adt_fit$spikes$is_spike)
+theta_Y <- adt_fit$theta_X[seq_len(r_Y)]
+z_Y <- right_singular_vectors(adt_fit$matrix, r = r_Y)
+
+data.frame(
+  modality = "ADT",
+  p = adt_fit$p,
+  n = adt_fit$n,
+  c_X = adt_fit$c_X,
+  n_spikes = r_Y,
+  tau2 = adt_fit$bulk$tau2,
+  lambda_plus = adt_fit$bulk$lambda_plus,
+  selected_iteration = adt_fit$bulk$selected_iteration
+)
+```
+
+## Refit RNA At Each UMI Depth
+
+```{r fit-rna-by-umi}
+fit_rows <- vector("list", length(sampling_rates))
+fit_list <- vector("list", length(sampling_rates))
+names(fit_list) <- as.character(sampling_rates)
+
+for (i in seq_along(sampling_rates)) {
+  rho <- sampling_rates[i]
+  rna_sub <- rna_counts
+  if (rho < 1) {
+    rna_sub <- scscale_downsample_counts_fraction(rna_sub, fraction = rho, seed = 564378 + i)
+  }
+
+  fit_rho <- scscale_fit(
+    rna_sub,
+    count_transform = count_transform,
+    fit_umi = FALSE,
+    mp_max_iter = 300,
+    mp_grid_n = 3000,
+    store_matrix = TRUE
+  )
+  fit_list[[as.character(rho)]] <- fit_rho
+
+  n_spikes <- sum(fit_rho$spikes$is_spike)
+  r_X <- min(r_theory_cap, n_spikes)
+  z_X <- right_singular_vectors(fit_rho$matrix, r = r_X)
+  P_XY <- scscale_subspace_overlap_matrix(z_X, z_Y)
+  mi_theory <- scscale_low_rank_mi(
+    fit_rho$theta_X[seq_len(r_X)],
+    theta_Y,
+    P = P_XY
+  )
+  mi_empirical <- scscale_empirical_mi(
+    rna_sub,
+    adt_counts,
+    r = r_empirical,
+    count_transform = count_transform
+  )
+
+  fit_rows[[i]] <- data.frame(
+    sampling_rate = rho,
+    total_umi_observed = sum(rna_sub),
+    p = fit_rho$p,
+    n = fit_rho$n,
+    c_X = fit_rho$c_X,
+    n_spikes = n_spikes,
+    r_X_used = r_X,
+    tau2 = fit_rho$bulk$tau2,
+    lambda_plus = fit_rho$bulk$lambda_plus,
+    selected_iteration = fit_rho$bulk$selected_iteration,
+    I_theory = mi_theory$I_theory,
+    I_empirical = mi_empirical$mi,
+    r_empirical = r_empirical,
+    r_eff_empirical = mi_empirical$r_eff
+  )
+}
+
+umi_diagnostics <- do.call(rbind, fit_rows)
+umi_diagnostics
+```
+
+## MP Bulk Fits
+
+```{r plot-mp-bulk-by-umi, fig.width=12, fig.height=10}
+old_par <- par(mfrow = c(3, 3), mar = c(4.0, 4.0, 2.6, 1))
+for (rho in sampling_rates) {
+  fit_rho <- fit_list[[as.character(rho)]]
+  lambda <- fit_rho$spectrum$lambda
+  bulk <- fit_rho$bulk
+  bulk_lambda <- lambda[bulk$bulk_index]
+  bulk_lambda <- bulk_lambda[is.finite(bulk_lambda) & bulk_lambda > 0]
+  mp_x <- seq(max(bulk$mp_lower, 0), bulk$lambda_plus, length.out = 500)
+  mp_y <- mp_density(mp_x, c_X = fit_rho$c_X, tau2 = bulk$tau2)
+
+  hist(
+    bulk_lambda,
+    breaks = 60,
+    freq = FALSE,
+    col = "grey85",
+    border = "white",
+    xlab = expression(lambda),
+    main = paste0("rho=", rho, ", spikes=", sum(fit_rho$spikes$is_spike))
+  )
+  lines(mp_x, mp_y, col = "#D55E00", lwd = 2)
+  abline(v = bulk$lambda_plus, col = "#D55E00", lty = 2)
+}
+plot.new()
+plot.new()
+par(old_par)
+```
+
+## Spike Count
+
+```{r plot-spike-count, fig.width=7, fig.height=4.5}
+plot(
+  umi_diagnostics$sampling_rate,
+  umi_diagnostics$r_X_used,
+  type = "b",
+  pch = 16,
+  col = "#0072B2",
+  ylim = range(c(umi_diagnostics$n_spikes, umi_diagnostics$r_X_used)),
+  xlab = expression("Sampling rate " * rho),
+  ylab = "RNA spikes",
+  main = "Detected vs used RNA spikes"
+)
+lines(umi_diagnostics$sampling_rate, umi_diagnostics$n_spikes, type = "b", pch = 1, col = "grey35")
+legend(
+  "topright",
+  legend = c("used for theory", "detected"),
+  col = c("#0072B2", "grey35"),
+  pch = c(16, 1),
+  lwd = 1,
+  bty = "n"
+)
+```
+
+## UMI MI Scaling
+
+```{r plot-umi-mi, fig.width=10, fig.height=4.5}
+old_par <- par(mfrow = c(1, 2), mar = c(4.2, 4.3, 2.6, 1))
+
+plot(
+  umi_diagnostics$sampling_rate,
+  umi_diagnostics$I_theory,
+  type = "b",
+  pch = 16,
+  col = "#0072B2",
+  xlab = expression("Sampling rate " * rho),
+  ylab = expression(I[theory]),
+  main = "Theoretical MI"
+)
+
+plot(
+  umi_diagnostics$sampling_rate,
+  umi_diagnostics$I_empirical,
+  type = "b",
+  pch = 17,
+  col = "#D55E00",
+  xlab = expression("Sampling rate " * rho),
+  ylab = expression(I[empirical]),
+  main = paste0("Empirical MI, r=", r_empirical)
+)
+
+par(old_par)
+```

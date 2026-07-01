@@ -1,15 +1,33 @@
 # scScale
 
-`scScale` is a small R package for object-style single-cell scaling-law
-analysis. It fits Gaussian spike models to count matrices and uses the fitted
-spike parameters to study sequencing-depth scaling, cell-number scaling, and
-spectral mutual information between modalities.
+`scScale` is a small R package for single-cell scaling-law analysis. It fits
+Gaussian spike models to count matrices and uses one low-rank subspace-alignment
+mutual information formula to study matched RNA/ADT modalities.
 
-The package surface is intentionally narrow:
+The main workflow is intentionally small:
 
-- `scscale_fit()` fits the Gaussian spike model for one feature-by-cell matrix.
-- `scscale_mi()` compares two fitted objects and computes spectral mutual
-  information across optional cell-number and UMI grids.
+- `scscale_pair_fit()` fits the two modalities once and stores their aligned
+  low-rank subspaces.
+- `scscale_umi_mi()` refits the RNA spike model over UMI depth and computes the
+  refitted theory curve plus the `I_infinity` bound.
+- `scscale_cell_number_mi()` computes the cell-number scaling curve.
+- `scscale_cell_number_by_umi_mi()` computes the joint cell-number by UMI
+  scaling surface.
+- `scscale_empirical_mi()` gives the empirical comparison curve.
+- `scscale_low_rank_mi()` is the shared MI formula used by the theory helpers.
+
+```r
+library(scScale)
+
+data(gse164378_3p_citeseq_hvg)
+x <- gse164378_3p_citeseq_hvg$rna_counts
+y <- gse164378_3p_citeseq_hvg$adt_counts
+
+pair <- scscale_pair_fit(x, y)
+umi <- scscale_umi_mi(pair, x, sampling_rates = c(0.25, 0.5, 1))
+cells <- scscale_cell_number_mi(pair, n_grid = c(500, 1000, 2000, 4000))
+joint <- scscale_cell_number_by_umi_mi(pair, umi, n_grid = c(500, 1000, 2000, 4000))
+```
 
 ## Installation
 
@@ -29,11 +47,15 @@ pak::pak("ChesleaZ/scScale")
 
 ## Tutorials
 
-Hosted tutorials are available at:
+The rendered tutorial and reference files are available on GitHub Pages:
 
-[https://chesleaz.github.io/scScale/](https://chesleaz.github.io/scScale/)
+- [scScale tutorial index](https://chesleaz.github.io/scScale/)
+- [Package manual PDF](https://chesleaz.github.io/scScale/scScale-manual.pdf)
+- [GSE164378 RNA-ADT mutual information](https://chesleaz.github.io/scScale/tutorials/gse164378-rna-adt-mi.html)
+- [GSE164378 RNA UMI scaling](https://chesleaz.github.io/scScale/tutorials/gse164378-umi-scaling.html)
+- [GSE164378 Gaussian spike fit](https://chesleaz.github.io/scScale/tutorials/gse164378-scscale-fit.html)
 
-The worked examples live in the installed package tutorials:
+The same examples are also installed with the package:
 
 ```r
 library(scScale)
@@ -41,17 +63,14 @@ tutorial_dir <- system.file("tutorials", package = "scScale")
 list.files(tutorial_dir, pattern = "\\.html$", full.names = TRUE)
 ```
 
-Open the tutorial HTML files for the full analysis workflow, including Gaussian
-spike fitting, UMI scaling, and CITE-seq mutual information.
-
 ## Example Data
 
 - `gse164378_3p_citeseq_hvg`: 4,000 matched 3' CITE-seq PBMC cells with 2,000
   RNA HVGs and 228 ADT features.
+- `gse123025_myeloid_hvg`: 2,000 HVGs by 1,922 myeloid cells for a compact RNA
+  spike-model example.
 
 ## Documentation
-
-[PDF documentation](https://chesleaz.github.io/scScale/scScale-manual.pdf)
 
 ```r
 system.file("doc/scScale-manual.pdf", package = "scScale")

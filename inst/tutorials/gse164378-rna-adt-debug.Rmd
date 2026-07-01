@@ -1,0 +1,237 @@
+---
+title: "GSE164378 RNA-ADT Debug: Fixed-Direction Quantities"
+output: html_document
+---
+
+This is a debug page, not a tutorial. It keeps the setup deliberately raw:
+
+- use the full 4,000-cell RNA fit only to define fixed RNA feature directions;
+- sample nested cell sets, so each smaller `n` is contained in larger `n`;
+- stratify by RNA molecule sampling rate `rho`;
+- for each `(rho, n)`, compute variance along the fixed directions, `d_X^2`,
+  `q_X`, `theta_X`, and RNA-to-ADT `I`.
+
+```{r setup}
+library(scScale)
+data(gse164378_3p_citeseq_hvg)
+
+rna_counts <- gse164378_3p_citeseq_hvg$rna_counts
+adt_counts <- gse164378_3p_citeseq_hvg$adt_counts
+meta <- gse164378_3p_citeseq_hvg$meta
+
+r_max <- 12
+count_transform <- "log1p_cpm"
+n_grid <- c(500, 1000, 2000, 3000, 4000)
+rho_grid <- c(0.35, 0.50, 0.70, 0.85, 1.00)
+
+dim(rna_counts)
+dim(adt_counts)
+table(meta$celltype.l1)
+```
+
+## Reference Directions
+
+```{r reference}
+rna_fit <- scscale_fit(
+  rna_counts,
+  count_transform = count_transform,
+  r = r_max,
+  fit_umi = FALSE,
+  mp_max_iter = 300,
+  mp_grid_n = 2500,
+  store_matrix = TRUE
+)
+
+adt_fit <- scscale_fit(
+  adt_counts,
+  count_transform = count_transform,
+  r = r_max,
+  fit_umi = FALSE,
+  mp_max_iter = 300,
+  mp_grid_n = 2500
+)
+
+r <- max(1L, min(
+  r_max,
+  sum(rna_fit$spikes$is_spike),
+  sum(adt_fit$spikes$is_spike),
+  length(rna_fit$theta_X),
+  length(adt_fit$theta_X)
+))
+u_ref <- svd(rna_fit$matrix, nu = r, nv = 0)$u[, seq_len(r), drop = FALSE]
+theta_Y <- adt_fit$theta_X[seq_len(r)]
+
+data.frame(
+  modality = c("RNA", "ADT"),
+  p = c(rna_fit$p, adt_fit$p),
+  n = c(rna_fit$n, adt_fit$n),
+  c_X = c(rna_fit$c_X, adt_fit$c_X),
+  n_spikes = c(sum(rna_fit$spikes$is_spike), sum(adt_fit$spikes$is_spike)),
+  r = r,
+  tau2 = c(rna_fit$bulk$tau2, adt_fit$bulk$tau2),
+  lambda_plus = c(rna_fit$bulk$lambda_plus, adt_fit$bulk$lambda_plus),
+  selected_iteration = c(rna_fit$bulk$selected_iteration, adt_fit$bulk$selected_iteration)
+)
+```
+
+## Raw Grid
+
+```{r compute-grid}
+set.seed(164378)
+cell_order <- sample(colnames(rna_counts), max(n_grid))
+
+rows <- vector("list", length(rho_grid) * length(n_grid))
+row_i <- 0L
+
+for (rho in rho_grid) {
+  for (n_i in n_grid) {
+    row_i <- row_i + 1L
+    cells <- cell_order[seq_len(n_i)]
+    rna_sub <- rna_counts[, cells, drop = FALSE]
+    if (rho < 1) {
+      rna_sub <- scscale_downsample_counts_fraction(
+        rna_sub,
+        fraction = rho,
+        seed = 264378 + row_i
+      )
+    }
+
+    X_sub <- scscale_normalize_counts(
+      rna_sub,
+      count_transform = count_transform,
+      center = TRUE,
+      scale = FALSE
+    )
+    fit_sub <- scscale_fit(
+      X_sub,
+      input = "normalized",
+      center = FALSE,
+      scale = FALSE,
+      r = r,
+      fit_umi = FALSE,
+      mp_max_iter = 300,
+      mp_grid_n = 1200
+    )
+
+    projected <- crossprod(u_ref, X_sub)
+    v_fixed <- rowSums(projected^2) / ncol(X_sub)
+    d2_X <- pmax(v_fixed - fit_sub$bulk$tau2, 0) / fit_sub$bulk$tau2
+    c_X <- nrow(X_sub) / ncol(X_sub)
+    q_X <- c_X * d2_X
+    theta_X <- scscale_recoverability(q_X, c_X = c_X)
+    I <- scscale_low_rank_mi(theta_X, theta_Y)$mi
+
+    rows[[row_i]] <- data.frame(
+      sampling_rate = rho,
+      n = n_i,
+      p = nrow(X_sub),
+      c_X = c_X,
+      total_umi_observed = sum(rna_sub),
+      tau2 = fit_sub$bulk$tau2,
+      lambda_plus = fit_sub$bulk$lambda_plus,
+      selected_iteration = fit_sub$bulk$selected_iteration,
+      I = I,
+      rank = seq_len(r),
+      v_fixed = v_fixed,
+      d2_X = d2_X,
+      q_X = q_X,
+      theta_X = theta_X
+    )
+  }
+}
+
+debug_grid <- do.call(rbind, rows)
+debug_summary <- unique(debug_grid[, c(
+  "sampling_rate", "n", "p", "c_X", "total_umi_observed",
+  "tau2", "lambda_plus", "selected_iteration", "I"
+)])
+
+debug_summary
+```
+
+## Cell Mix
+
+```{r cell-mix, fig.width=8, fig.height=4.2}
+cell_mix <- do.call(rbind, lapply(n_grid, function(n_i) {
+  cells <- cell_order[seq_len(n_i)]
+  tab <- prop.table(table(meta[cells, "celltype.l1"]))
+  data.frame(n = n_i, celltype = names(tab), fraction = as.numeric(tab))
+}))
+
+cell_mix
+
+mix_mat <- xtabs(fraction ~ n + celltype, data = cell_mix)
+barplot(
+  t(mix_mat),
+  beside = FALSE,
+  col = grDevices::hcl.colors(ncol(mix_mat), "Dark 3"),
+  xlab = "Nested sampled cell number n",
+  ylab = "Cell type fraction",
+  main = "Cell mix across nested n"
+)
+legend("right", legend = colnames(mix_mat), fill = grDevices::hcl.colors(ncol(mix_mat), "Dark 3"), bty = "n", cex = 0.8)
+```
+
+## Quantities By n, Stratified By U
+
+```{r plot-raw-quantities, fig.width=11, fig.height=14}
+rank_cols <- grDevices::hcl.colors(r, "Dark 3")
+plot_quantity <- function(y, ylab, main_prefix) {
+  old_par <- par(mfrow = c(length(rho_grid), 1), mar = c(3.5, 4.2, 2.2, 1))
+  on.exit(par(old_par), add = TRUE)
+  for (rho in rho_grid) {
+    df_rho <- debug_grid[debug_grid$sampling_rate == rho, ]
+    ylim <- range(df_rho[[y]], finite = TRUE)
+    plot(
+      NA,
+      xlim = range(n_grid),
+      ylim = ylim,
+      xlab = "Nested sampled cell number n",
+      ylab = ylab,
+      main = paste0(main_prefix, ", rho=", rho)
+    )
+    for (k in seq_len(r)) {
+      df <- df_rho[df_rho$rank == k, ]
+      df <- df[order(df$n), ]
+      lines(df$n, df[[y]], col = rank_cols[k], lwd = 1.6)
+      points(df$n, df[[y]], col = rank_cols[k], pch = 16, cex = 0.65)
+    }
+    abline(v = 2000, col = "grey40", lty = 2)
+  }
+}
+
+plot_quantity("v_fixed", expression(v[X*k]), "Fixed-direction variance")
+plot_quantity("d2_X", expression(hat(d)[X*k]^2), "d2")
+plot_quantity("q_X", expression(q[X*k]), "q")
+plot_quantity("theta_X", expression(theta[X*k]), "theta")
+```
+
+## I By n
+
+```{r plot-I, fig.width=8, fig.height=4.8}
+I_cols <- grDevices::hcl.colors(length(rho_grid), "Dark 3")
+plot(
+  NA,
+  xlim = range(n_grid),
+  ylim = range(debug_summary$I),
+  xlab = "Nested sampled cell number n",
+  ylab = expression(I),
+  main = "RNA-ADT I by n, stratified by rho"
+)
+for (i in seq_along(rho_grid)) {
+  rho <- rho_grid[i]
+  df <- debug_summary[debug_summary$sampling_rate == rho, ]
+  df <- df[order(df$n), ]
+  lines(df$n, df$I, col = I_cols[i], lwd = 2)
+  points(df$n, df$I, col = I_cols[i], pch = 16)
+}
+abline(v = 2000, col = "grey40", lty = 2)
+legend(
+  "topright",
+  legend = paste0("rho=", rho_grid),
+  col = I_cols,
+  lwd = 2,
+  pch = 16,
+  bty = "n"
+)
+```

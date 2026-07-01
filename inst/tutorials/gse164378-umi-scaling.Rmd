@@ -13,6 +13,7 @@ data(gse164378_3p_citeseq_hvg)
 
 counts <- gse164378_3p_citeseq_hvg$rna_counts
 adt <- gse164378_3p_citeseq_hvg$adt_counts
+count_transform <- "log1p_cpm"
 ```
 
 ## Fit UMI Scaling
@@ -27,11 +28,12 @@ sampling_rates <- c(0.10, 0.20, 0.35, 0.50, 0.70, 0.85, 1.00)
 umi_scaling <- scscale_umi_scaling(
   counts,
   sampling_rates = sampling_rates,
+  count_transform = count_transform,
   r = 12,
   seed = 164378,
   n_replicates = 1,
   empirical = FALSE,
-  mp_max_iter = 20,
+  mp_max_iter = 300,
   mp_grid_n = 2500
 )
 

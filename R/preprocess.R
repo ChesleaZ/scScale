@@ -54,8 +54,7 @@ pearson_residuals <- function(counts, clip = 10, pseudo_count = 1e-4) {
 }
 
 scaled_log1p <- function(counts) {
-  X <- log1p(as_dense_matrix(counts))
-  X <- t(scale(t(X), center = TRUE, scale = TRUE))
+  X <- scscale_normalize_counts(counts, count_transform = "log1p_cpm", center = TRUE, scale = FALSE)
   X[!is.finite(X)] <- 0
   X
 }

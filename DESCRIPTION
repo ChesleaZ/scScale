@@ -2,8 +2,10 @@ Package: scScale
 Title: Single-Cell Scaling Law Utilities
 Version: 0.0.1
 Authors@R:
-    person("Jingyuan", "Hu", role = c("aut", "cre"), email = "jingyuanhu@example.com")
-Author: Jingyuan Hu [aut, cre]
+    c(person("Jingyuan", "Hu", role = c("aut", "cre"), email = "jingyuanhu@example.com"),
+      person("Sijia", "Zhu", role = c("aut", "cre")))
+Author: Jingyuan Hu [aut, cre],
+  Sijia Zhu [aut, cre]
 Maintainer: Jingyuan Hu <jingyuanhu@example.com>
 Description: Median Marchenko-Pastur noise calibration, BBP spike inversion,
     spectral overlap, and task-difficulty utilities for single-cell scaling

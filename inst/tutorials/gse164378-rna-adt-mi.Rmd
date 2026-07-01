@@ -3,354 +3,269 @@ title: "RNA-ADT Mutual Information With GSE164378 3' CITE-seq"
 output: html_document
 ---
 
-This tutorial uses the paired GSE164378 3' CITE-seq example to estimate
-RNA-to-ADT spectral mutual information. RNA is the measured modality `X`; ADT
-is the paired target modality `Y`.
+This tutorial runs the paired-modality `scScale` workflow on 4,000 matched
+GSE164378 3' CITE-seq PBMC cells. The RNA side has 2,000 HVGs and the ADT side
+has 228 antibody features.
 
-```{r setup, include=FALSE}
+The package-level scaling API has three pieces:
+
+1. `scscale_umi_mi()` for UMI-depth scaling.
+2. `scscale_cell_number_mi()` for cell-number scaling.
+3. `scscale_cell_number_by_umi_mi()` for the joint cell-number by UMI grid.
+
+Empirical curves are direct calls to `scscale_empirical_mi()`.
+All three theory functions use the same low-rank MI formula,
+`scscale_low_rank_mi()`, after preparing the appropriate recoverability values
+and RNA-ADT subspace alignment matrix.
+
+```{r setup}
 library(scScale)
 data(gse164378_3p_citeseq_hvg)
 
 rna_counts <- gse164378_3p_citeseq_hvg$rna_counts
 adt_counts <- gse164378_3p_citeseq_hvg$adt_counts
+count_transform <- "log1p_cpm"
+r_empirical <- 12
+
+dim(rna_counts)
+dim(adt_counts)
 ```
 
-## Fit RNA and ADT
+## Fit Modalities
+
+`scscale_pair_fit()` fits MAD-based spike models for RNA and ADT, then builds
+the RNA-ADT subspace-overlap matrix used by theoretical MI.
 
 ```{r fit-modalities}
-r <- 12
-
-rna_fit <- scscale_fit(
+pair <- scscale_pair_fit(
   rna_counts,
-  r = r,
-  fit_umi = FALSE,
-  mp_max_iter = 20,
-  mp_grid_n = 4000,
-  store_matrix = TRUE
-)
-
-adt_fit <- scscale_fit(
   adt_counts,
-  r = r,
-  fit_umi = FALSE,
-  mp_max_iter = 20,
-  mp_grid_n = 4000
+  count_transform = count_transform,
+  mp_grid_n = 3000
 )
 
 data.frame(
   modality = c("RNA", "ADT"),
-  p = c(rna_fit$p, adt_fit$p),
-  n = c(rna_fit$n, adt_fit$n),
-  c_X = c(rna_fit$c_X, adt_fit$c_X),
-  tau2 = c(rna_fit$bulk$tau2, adt_fit$bulk$tau2),
-  lambda_plus = c(rna_fit$bulk$lambda_plus, adt_fit$bulk$lambda_plus),
-  selected_iteration = c(rna_fit$bulk$selected_iteration, adt_fit$bulk$selected_iteration)
+  p = c(pair$x_fit$p, pair$y_fit$p),
+  n = c(pair$x_fit$n, pair$y_fit$n),
+  n_spikes = c(pair$r_X, pair$r_Y),
+  tau2 = c(pair$x_fit$bulk$tau2, pair$y_fit$bulk$tau2),
+  lambda_plus = c(pair$x_fit$bulk$lambda_plus, pair$y_fit$bulk$lambda_plus),
+  method = c(pair$x_fit$bulk$method, pair$y_fit$bulk$method)
 )
-
-theta_Y <- adt_fit$theta_X[seq_len(r)]
 
 data.frame(
-  I_theory = scscale_theory_mi(rna_fit, adt_fit, r = r)$I_theory,
-  I_infinity = scscale_i_infinity(rna_fit, adt_fit, r = r)$I_infinity
+  I_theory = pair$mi$I_theory,
+  I_empirical = pair$mi$I_empirical,
+  I_infinity = pair$I_infinity
 )
 ```
 
-## UMI Scaling Law
+## Theory Curves
 
-```{r fit-umi-mi}
+The UMI curve refits the RNA spike model at each depth, so both
+`I_theory` and `I_infinity` use the BBP-detectable rank at that UMI level.
+
+```{r theory-curves}
 sampling_rates <- c(0.10, 0.20, 0.35, 0.50, 0.70, 0.85, 1.00)
+rho_grid <- c(0.35, 0.50, 0.70, 0.85, 1.00)
+n_grid <- c(500, 1000, 2000, 4000)
 
-umi_scaling <- scscale_umi_scaling(
+umi_theory <- scscale_umi_mi(
+  pair,
   rna_counts,
   sampling_rates = sampling_rates,
-  r = r,
-  seed = 164378,
-  n_replicates = 1,
-  theta_Y = theta_Y,
-  reference_fit = rna_fit,
-  empirical = FALSE,
-  mp_max_iter = 20,
-  mp_grid_n = 2500
+  count_transform = count_transform,
+  seed = 164378
 )
 
-umi_mi <- unique(umi_scaling$scaling[, c(
-  "sampling_rate", "U", "total_umi_observed", "I_theory", "I_infinity"
-)])
+cell_theory <- scscale_cell_number_mi(pair, n_grid = n_grid)
 
-umi_mi
-umi_scaling$q_fit_rate
+cell_by_umi_theory <- scscale_cell_number_by_umi_mi(
+  pair,
+  umi_theory,
+  n_grid = n_grid,
+  sampling_rates = rho_grid
+)
+
+umi_theory$curve[, c("sampling_rate", "r_X", "I_theory", "I_infinity")]
 ```
 
-## Cell Scaling Curves
+## Empirical Curves
 
-For a fixed sequencing rate `rho`, the fitted RNA spike strengths give
-`d2_X(rho) = q_X(rho) / c_ref`, where `c_ref = p / n_ref` at 4,000 cells.
-Changing cell number changes `c_X = p / n`, while the fixed-UMI spike strengths
-are held on that sequencing-rate curve.
+The empirical curves use the same subspace-overlap MI estimator directly on
+downsampled or subsetted count matrices.
 
-```{r fit-cell-mi}
-n_grid <- c(500, 1000, 2000, 3000, 4000)
-rho_grid <- c(0.35, 0.50, 0.70, 0.85, 1.00)
-c_ref <- rna_fit$c_X
+```{r empirical-curves}
+summarize_empirical <- function(x) {
+  out <- aggregate(I_empirical ~ sampling_rate + n, data = x, FUN = mean)
+  out$I_empirical_sd <- aggregate(I_empirical ~ sampling_rate + n, data = x, FUN = stats::sd)$I_empirical
+  out$n_replicates <- length(unique(x$replicate))
+  out
+}
 
-cell_theta <- do.call(rbind, lapply(rho_grid, function(rho) {
-  q_df <- unique(umi_scaling$scaling[umi_scaling$scaling$sampling_rate == rho,
-                                    c("rank", "q_X_rate_hat")])
-  q_df <- q_df[order(q_df$rank), ]
-  d2_rho <- q_df$q_X_rate_hat / c_ref
-  out <- scscale_cell_scaling(d2_rho, p = rna_fit$p, n_grid = n_grid, theta_Y = theta_Y)
-  transform(out, sampling_rate = rho)
+umi_empirical <- do.call(rbind, lapply(seq_along(sampling_rates), function(i) {
+  rho <- sampling_rates[i]
+  rna_sub <- rna_counts
+  if (rho < 1) {
+    rna_sub <- scscale_downsample_counts_fraction(rna_sub, fraction = rho, seed = 364378 + i)
+  }
+  mi <- scscale_empirical_mi(rna_sub, adt_counts, r = r_empirical, count_transform = count_transform)
+  data.frame(sampling_rate = rho, I_empirical = mi$mi, r_eff = mi$r_eff)
 }))
 
-cell_curves <- aggregate(
-  I_theory ~ n + c_X + sampling_rate,
-  data = cell_theta,
-  FUN = unique
-)
+n_replicates <- 2
+cell_orders <- lapply(seq_len(n_replicates), function(replicate) {
+  set.seed(264378 + replicate)
+  sample(colnames(rna_counts), max(n_grid))
+})
 
-cell_curves
+cell_empirical_replicates <- do.call(rbind, lapply(seq_len(n_replicates), function(replicate) {
+  do.call(rbind, lapply(n_grid, function(n_i) {
+    cells <- cell_orders[[replicate]][seq_len(n_i)]
+    mi <- scscale_empirical_mi(
+      rna_counts[, cells, drop = FALSE],
+      adt_counts[, cells, drop = FALSE],
+      r = r_empirical,
+      count_transform = count_transform
+    )
+    data.frame(sampling_rate = 1, n = n_i, replicate = replicate, I_empirical = mi$mi, r_eff = mi$r_eff)
+  }))
+}))
+cell_empirical <- summarize_empirical(cell_empirical_replicates)
+
+cell_by_umi_empirical_replicates <- do.call(rbind, lapply(seq_along(rho_grid), function(rho_i) {
+  rho <- rho_grid[rho_i]
+  do.call(rbind, lapply(seq_len(n_replicates), function(replicate) {
+    do.call(rbind, lapply(n_grid, function(n_i) {
+      cells <- cell_orders[[replicate]][seq_len(n_i)]
+      rna_sub <- rna_counts[, cells, drop = FALSE]
+      if (rho < 1) {
+        rna_sub <- scscale_downsample_counts_fraction(
+          rna_sub,
+          fraction = rho,
+          seed = 464378 + rho_i * 100 + replicate * 10 + match(n_i, n_grid)
+        )
+      }
+      mi <- scscale_empirical_mi(
+        rna_sub,
+        adt_counts[, cells, drop = FALSE],
+        r = r_empirical,
+        count_transform = count_transform
+      )
+      data.frame(sampling_rate = rho, n = n_i, replicate = replicate, I_empirical = mi$mi, r_eff = mi$r_eff)
+    }))
+  }))
+}))
+cell_by_umi_empirical <- summarize_empirical(cell_by_umi_empirical_replicates)
 ```
 
-## Recoverability Check
+## Six Plots
 
-```{r plot-theta-cell-scaling, fig.width=7, fig.height=4.2}
-theta_full <- cell_theta[cell_theta$sampling_rate == 1 & cell_theta$rank <= 6, ]
-theta_cols <- c("#0072B2", "#D55E00", "#009E73", "#CC79A7", "#56B4E9", "#E69F00")
+```{r six-panel-plots, fig.width=12, fig.height=12}
+draw_error_bars <- function(x, y, sd, col, length = 0.04) {
+  keep <- is.finite(x) & is.finite(y) & is.finite(sd) & sd > 1e-8
+  if (!any(keep)) return(invisible(NULL))
+  arrows(x[keep], y[keep] - sd[keep], x[keep], y[keep] + sd[keep],
+         angle = 90, code = 3, length = length, col = col)
+}
+
+rho_cols <- setNames(
+  c("#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00"),
+  as.character(rho_grid)
+)
+
+old_par <- par(mfrow = c(3, 2), mar = c(4.2, 4.3, 2.5, 1))
 
 plot(
-  NA,
-  xlim = range(theta_full$n),
-  ylim = range(theta_full$theta_X),
-  xlab = "Cell number n",
-  ylab = expression(theta[X*k](n)),
-  main = expression("Recoverability at " * rho == 1)
-)
-for (k in sort(unique(theta_full$rank))) {
-  df <- theta_full[theta_full$rank == k, ]
-  df <- df[order(df$n), ]
-  lines(df$n, df$theta_X, col = theta_cols[k], lwd = 2)
-  points(df$n, df$theta_X, col = theta_cols[k], pch = 16)
-}
-legend(
-  "bottomleft",
-  legend = paste0("k=", 1:6),
-  col = theta_cols,
-  lwd = 2,
-  pch = 16,
-  bty = "n",
-  cex = 0.85
-)
-```
-
-## Empirical d2 Check
-
-If the population spike strength `d_X^2` is stable, the estimates below should
-be roughly flat across sampled cell numbers at a fixed sequencing rate.
-
-```{r empirical-d2-cell-scaling}
-d2_grid <- expand.grid(
-  sampling_rate = rho_grid,
-  n = n_grid,
-  KEEP.OUT.ATTRS = FALSE
-)
-
-u_ref <- svd(rna_fit$matrix, nu = r, nv = 0)$u[, seq_len(r), drop = FALSE]
-d2_rows <- vector("list", nrow(d2_grid))
-for (i in seq_len(nrow(d2_grid))) {
-  rho <- d2_grid$sampling_rate[i]
-  n_i <- d2_grid$n[i]
-  set.seed(364378 + i)
-  cells <- sample(colnames(rna_counts), n_i)
-
-  rna_sub <- rna_counts[, cells, drop = FALSE]
-  if (rho < 1) {
-    rna_sub <- scscale_downsample_counts_fraction(rna_sub, fraction = rho, seed = 464378 + i)
-  }
-
-  X_sub <- scscale_normalize_counts(rna_sub, center = TRUE, scale = TRUE)
-  fit_sub <- scscale_fit(
-    X_sub,
-    input = "normalized",
-    center = FALSE,
-    scale = FALSE,
-    r = r,
-    mp_max_iter = 20,
-    mp_grid_n = 1500
-  )
-
-  projected <- crossprod(u_ref, X_sub)
-  v <- rowSums(projected^2) / ncol(X_sub)
-  d2_hat <- pmax(v - fit_sub$bulk$tau2, 0) / fit_sub$bulk$tau2
-  d2_rows[[i]] <- data.frame(
-    sampling_rate = rho,
-    n = n_i,
-    rank = seq_len(r),
-    tau2 = fit_sub$bulk$tau2,
-    d2_X = d2_hat
-  )
-}
-
-d2_empirical <- do.call(rbind, d2_rows)
-d2_empirical[d2_empirical$rank <= 6, ]
-```
-
-```{r plot-d2-cell-scaling, fig.width=11, fig.height=3.7}
-d2_ranks <- 1:6
-d2_plot <- d2_empirical[d2_empirical$rank %in% d2_ranks, ]
-
-old_par <- par(mfrow = c(1, 3), mar = c(4.2, 4.2, 2.4, 1))
-for (rho in c(0.35, 0.70, 1.00)) {
-  df_rho <- d2_plot[d2_plot$sampling_rate == rho, ]
-  plot(
-    NA,
-    xlim = range(df_rho$n),
-    ylim = range(df_rho$d2_X),
-    xlab = "Sampled cell number n",
-    ylab = expression(hat(d)[X*k]^2),
-    main = bquote(rho == .(rho))
-  )
-  for (k in d2_ranks) {
-    df <- df_rho[df_rho$rank == k, ]
-    df <- df[order(df$n), ]
-    lines(df$n, df$d2_X, col = theta_cols[k], lwd = 2)
-    points(df$n, df$d2_X, col = theta_cols[k], pch = 16)
-  }
-}
-par(old_par)
-```
-
-## Empirical Comparison
-
-The empirical points recompute RNA and ADT cell subspaces on matched cell
-subsamples. RNA is also globally thinned at the specified sequencing rate.
-
-```{r empirical-mi}
-empirical_grid <- expand.grid(
-  sampling_rate = rho_grid,
-  n = n_grid,
-  KEEP.OUT.ATTRS = FALSE
-)
-
-empirical_rows <- vector("list", nrow(empirical_grid))
-for (i in seq_len(nrow(empirical_grid))) {
-  rho <- empirical_grid$sampling_rate[i]
-  n_i <- empirical_grid$n[i]
-  set.seed(164378 + i)
-  cells <- sample(colnames(rna_counts), n_i)
-
-  rna_sub <- rna_counts[, cells, drop = FALSE]
-  adt_sub <- adt_counts[, cells, drop = FALSE]
-  if (rho < 1) {
-    rna_sub <- scscale_downsample_counts_fraction(rna_sub, fraction = rho, seed = 264378 + i)
-  }
-
-  X <- scscale_normalize_counts(rna_sub, center = TRUE, scale = TRUE)
-  Y <- scscale_normalize_counts(adt_sub, center = TRUE, scale = TRUE)
-  z_X <- right_singular_vectors(X, r = r)
-  z_Y <- right_singular_vectors(Y, r = r)
-  mi_emp <- subspace_overlap_mi(z_X, z_Y)
-
-  theory_match <- cell_curves[
-    cell_curves$sampling_rate == rho & cell_curves$n == n_i,
-    "I_theory"
-  ]
-  empirical_rows[[i]] <- data.frame(
-    sampling_rate = rho,
-    n = n_i,
-    I_empirical = mi_emp$mi,
-    I_theory = theory_match,
-    r_eff = mi_emp$r_eff
-  )
-}
-
-empirical_mi <- do.call(rbind, empirical_rows)
-empirical_mi
-```
-
-## Plots
-
-```{r plot-mi, fig.width=11, fig.height=7.2}
-cols <- c("0.35" = "#0072B2", "0.50" = "#D55E00", "0.70" = "#009E73",
-          "0.85" = "#CC79A7", "1" = "#E69F00")
-
-old_par <- par(mfrow = c(2, 2), mar = c(4.2, 4.2, 2.4, 1))
-
-plot(
-  umi_mi$sampling_rate,
-  umi_mi$I_theory,
+  umi_theory$curve$sampling_rate,
+  umi_theory$curve$I_theory,
+  type = "b",
   pch = 16,
   col = "#0072B2",
-  type = "b",
+  ylim = range(c(umi_theory$curve$I_theory, umi_theory$curve$I_infinity)),
   xlab = expression("Sampling rate " * rho),
-  ylab = expression(I(rho)),
-  main = "UMI scaling law"
+  ylab = expression(I[theory]),
+  main = "UMI scaling: theory"
 )
-lines(umi_mi$sampling_rate, umi_mi$I_infinity, col = "#D55E00", lwd = 2, lty = 2)
-legend(
-  "bottomright",
-  legend = c("finite n", "infinite n"),
-  col = c("#0072B2", "#D55E00"),
-  pch = c(16, NA),
-  lwd = c(1, 2),
-  lty = c(1, 2),
-  bty = "n"
+lines(umi_theory$curve$sampling_rate, umi_theory$curve$I_infinity, col = "grey35", lwd = 2, lty = 2)
+legend("bottomright", legend = c("refit rank", expression(I[infinity])),
+       col = c("#0072B2", "grey35"), pch = c(16, NA), lwd = c(1, 2),
+       lty = c(1, 2), bty = "n")
+
+plot(
+  umi_empirical$sampling_rate,
+  umi_empirical$I_empirical,
+  type = "b",
+  pch = 17,
+  col = "#D55E00",
+  xlab = expression("Sampling rate " * rho),
+  ylab = expression(I[empirical]),
+  main = "UMI scaling: empirical"
 )
+
+plot(
+  cell_theory$n,
+  cell_theory$I_theory,
+  type = "b",
+  pch = 16,
+  col = "#0072B2",
+  ylim = range(c(cell_theory$I_theory, pair$I_infinity)),
+  xlab = "Cell number n",
+  ylab = expression(I[theory]),
+  main = "Cell number scaling: theory"
+)
+abline(h = pair$I_infinity, col = "grey35", lwd = 2, lty = 2)
+legend("topright", legend = c("theory", expression(I[infinity])),
+       col = c("#0072B2", "grey35"), pch = c(16, NA), lwd = c(1, 2),
+       lty = c(1, 2), bty = "n")
+
+plot(
+  cell_empirical$n,
+  cell_empirical$I_empirical,
+  type = "b",
+  pch = 17,
+  col = "#D55E00",
+  xlab = "Cell number n",
+  ylab = expression(I[empirical]),
+  main = "Cell number scaling: empirical"
+)
+draw_error_bars(cell_empirical$n, cell_empirical$I_empirical, cell_empirical$I_empirical_sd, col = "#D55E00")
 
 plot(
   NA,
   xlim = range(n_grid),
-  ylim = range(c(cell_curves$I_theory, empirical_mi$I_empirical)),
+  ylim = range(cell_by_umi_theory$I_theory),
   xlab = "Cell number n",
-  ylab = expression(I(n, rho)),
-  main = "I(n, U) at fixed UMI rates"
+  ylab = expression(I[theory](n, rho)),
+  main = "Cell number by UMI: theory"
 )
 for (rho in rho_grid) {
-  df <- cell_curves[cell_curves$sampling_rate == rho, ]
+  key <- as.character(rho)
+  df <- cell_by_umi_theory[cell_by_umi_theory$sampling_rate == rho, ]
   df <- df[order(df$n), ]
-  lines(df$n, df$I_theory, col = cols[as.character(rho)], lwd = 2)
-  emp <- empirical_mi[empirical_mi$sampling_rate == rho, ]
-  points(emp$n, emp$I_empirical, pch = 16, col = cols[as.character(rho)])
+  lines(df$n, df$I_theory, col = rho_cols[key], lwd = 2)
+  points(df$n, df$I_theory, col = rho_cols[key], pch = 16)
 }
-legend(
-  "bottomright",
-  legend = paste0("rho=", rho_grid),
-  col = cols[as.character(rho_grid)],
-  lwd = 2,
-  pch = 16,
-  bty = "n",
-  cex = 0.85
-)
+legend("topright", legend = paste0("rho=", rho_grid), col = rho_cols, lwd = 2, pch = 16, bty = "n")
 
 plot(
-  n_grid,
-  cell_curves[cell_curves$sampling_rate == 1, "I_theory"],
-  type = "b",
-  pch = 16,
-  col = "#0072B2",
+  NA,
+  xlim = range(n_grid),
+  ylim = range(cell_by_umi_empirical$I_empirical),
   xlab = "Cell number n",
-  ylab = expression(I(n, rho == 1)),
-  main = "Cell number scaling law"
+  ylab = expression(I[empirical](n, rho)),
+  main = "Cell number by UMI: empirical"
 )
-emp_full <- empirical_mi[empirical_mi$sampling_rate == 1, ]
-points(emp_full$n, emp_full$I_empirical, pch = 17, col = "#D55E00")
-legend(
-  "bottomright",
-  legend = c("theory", "empirical"),
-  col = c("#0072B2", "#D55E00"),
-  pch = c(16, 17),
-  lwd = c(1, NA),
-  bty = "n"
-)
+for (rho in rho_grid) {
+  key <- as.character(rho)
+  emp <- cell_by_umi_empirical[cell_by_umi_empirical$sampling_rate == rho, ]
+  emp <- emp[order(emp$n), ]
+  lines(emp$n, emp$I_empirical, col = rho_cols[key], lwd = 2)
+  points(emp$n, emp$I_empirical, col = rho_cols[key], pch = 16)
+  draw_error_bars(emp$n, emp$I_empirical, emp$I_empirical_sd, col = rho_cols[key], length = 0.03)
+}
+legend("topright", legend = paste0("rho=", rho_grid), col = rho_cols, lwd = 2, pch = 16, bty = "n", cex = 0.85)
 
-plot(
-  empirical_mi$I_theory,
-  empirical_mi$I_empirical,
-  pch = 16,
-  col = cols[as.character(empirical_mi$sampling_rate)],
-  xlab = "Theory",
-  ylab = "Empirical",
-  main = "Empirical comparison"
-)
-abline(0, 1, col = "black", lwd = 2, lty = 2)
 par(old_par)
 ```

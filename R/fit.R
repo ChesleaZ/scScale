@@ -8,11 +8,12 @@ scscale_fit <- function(
   n = NULL,
   p = NULL,
   target_depth = 1e4,
+  count_transform = c("log1p_cpm", "pearson_residual", "log1p"),
   center = TRUE,
-  scale = TRUE,
+  scale = FALSE,
   n_features = NULL,
   min_cells = 10,
-  mp_max_iter = 50,
+  mp_max_iter = 300,
   mp_grid_n = 20000,
   mp_stop_metric = c("qq_rmse_log", "ks", "neg_log_likelihood", "none"),
   mp_stop_tol = 1e-4,
@@ -27,6 +28,7 @@ scscale_fit <- function(
   use_irlba = TRUE
 ) {
   input <- match.arg(input)
+  count_transform <- match.arg(count_transform)
   mp_stop_metric <- match.arg(mp_stop_metric)
   matched_call <- match.call()
 
@@ -34,6 +36,7 @@ scscale_fit <- function(
     x,
     input = input,
     target_depth = target_depth,
+    count_transform = count_transform,
     center = center,
     scale = scale,
     n_features = n_features,
@@ -101,6 +104,9 @@ scscale_fit <- function(
       sampling_rates = sampling_rates,
       r = object$r,
       target_depth = target_depth,
+      count_transform = count_transform,
+      center = center,
+      scale = scale,
       n_features = n_features,
       min_cells = min_cells,
       seed = umi_seed,
@@ -121,13 +127,16 @@ scscale_prepare_matrix <- function(
   x,
   input,
   target_depth = 1e4,
+  count_transform = c("log1p_cpm", "pearson_residual", "log1p"),
   center = TRUE,
-  scale = TRUE,
+  scale = FALSE,
   n_features = NULL,
   min_cells = 10,
   n = NULL,
   p = NULL
 ) {
+  count_transform <- match.arg(count_transform)
+
   if (input == "eigenvalues") {
     if (is.null(n) || is.null(p)) {
       stop("n and p are required when input = 'eigenvalues'.", call. = FALSE)
@@ -154,10 +163,17 @@ scscale_prepare_matrix <- function(
   }
 
   if (input == "counts") {
-    mat <- scscale_normalize_counts(mat, target_depth = target_depth, center = center, scale = scale)
-    norm <- list(
-      method = "library_size_log1p_gene_scale",
+    mat <- scscale_normalize_counts(
+      mat,
       target_depth = target_depth,
+      count_transform = count_transform,
+      center = center,
+      scale = scale
+    )
+    norm <- list(
+      method = paste0(count_transform, "_row_center"),
+      target_depth = target_depth,
+      count_transform = count_transform,
       center = center,
       scale = scale
     )
@@ -182,17 +198,30 @@ scscale_prepare_matrix <- function(
   )
 }
 
-scscale_normalize_counts <- function(counts, target_depth = 1e4, center = TRUE, scale = TRUE) {
+scscale_normalize_counts <- function(
+  counts,
+  target_depth = 1e4,
+  count_transform = c("log1p_cpm", "pearson_residual", "log1p"),
+  center = TRUE,
+  scale = FALSE
+) {
+  count_transform <- match.arg(count_transform)
   counts <- as_dense_matrix(counts)
   counts[counts < 0] <- 0
-  library_size <- colSums(counts)
-  library_size[!is.finite(library_size) | library_size <= 0] <- 1
-  normalized <- sweep(counts, 2, library_size, "/") * target_depth
-  normalized <- log1p(normalized)
+  normalized <- switch(
+    count_transform,
+    log1p = log1p(counts),
+    log1p_cpm = {
+      library_size <- colSums(counts)
+      library_size[!is.finite(library_size) | library_size <= 0] <- 1
+      log1p(sweep(counts, 2, library_size, "/") * target_depth)
+    },
+    pearson_residual = pearson_residuals(counts)
+  )
   scscale_standardize_rows(normalized, center = center, scale = scale)
 }
 
-scscale_standardize_rows <- function(x, center = TRUE, scale = TRUE, scale_floor = 1e-12) {
+scscale_standardize_rows <- function(x, center = TRUE, scale = FALSE, scale_floor = 1e-12) {
   x <- as_dense_matrix(x)
   if (isTRUE(center)) {
     x <- x - rowMeans(x)
@@ -263,15 +292,106 @@ scscale_mp_density <- function(x, c_X, tau2 = 1, positive_only = TRUE) {
   out
 }
 
-scscale_mp_quantile <- function(c_X, prob = 0.5, tau2 = 1, grid_n = 20000) {
+.scscale_mp_median_cache <- new.env(parent = emptyenv())
+
+scscale_mp_cdf_integrated <- function(q, c_X, tau2 = 1) {
   edge <- scscale_mp_edges(c_X, tau2)
   if (!all(is.finite(edge))) return(NA_real_)
-  x <- seq(max(edge[["lower"]], 0) + 1e-12, edge[["upper"]] - 1e-12, length.out = grid_n)
+  lower <- max(edge[["lower"]], 0)
+  upper <- edge[["upper"]]
+  if (q <= lower) return(0)
+  if (q >= upper) return(1)
+
+  stats::integrate(
+    scscale_mp_density,
+    lower = lower,
+    upper = q,
+    c_X = c_X,
+    tau2 = tau2,
+    positive_only = TRUE,
+    subdivisions = 200L,
+    rel.tol = 1e-8
+  )$value
+}
+
+scscale_mp_quantile_grid <- function(c_X, prob = 0.5, tau2 = 1, grid_n = 20000) {
+  edge <- scscale_mp_edges(c_X, tau2)
+  if (!all(is.finite(edge))) return(rep(NA_real_, length(prob)))
+  lower <- max(edge[["lower"]], 0)
+  upper <- edge[["upper"]]
+  dx <- (upper - lower) / grid_n
+  x <- lower + (seq_len(grid_n) - 0.5) * dx
   density <- scscale_mp_density(x, c_X, tau2 = tau2, positive_only = TRUE)
-  dx <- c(diff(x), utils::tail(diff(x), 1))
   cdf <- cumsum(density * dx)
   cdf <- cdf / max(cdf)
   stats::approx(cdf, x, xout = prob, ties = "ordered", rule = 2)$y
+}
+
+scscale_mp_quantile <- function(c_X, prob = 0.5, tau2 = 1, grid_n = 20000) {
+  if (length(prob) != 1L) {
+    return(scscale_mp_quantile_grid(c_X = c_X, prob = prob, tau2 = tau2, grid_n = grid_n))
+  }
+
+  edge <- scscale_mp_edges(c_X, tau2)
+  if (!all(is.finite(edge))) return(NA_real_)
+  lower <- max(edge[["lower"]], 0)
+  upper <- edge[["upper"]]
+  if (prob <= 0) return(lower)
+  if (prob >= 1) return(upper)
+
+  stats::uniroot(
+    function(x) scscale_mp_cdf_integrated(x, c_X = c_X, tau2 = tau2) - prob,
+    interval = c(lower, upper),
+    tol = .Machine$double.eps^0.25
+  )$root
+}
+
+scscale_mp_median_sample <- function(
+  c_X,
+  tau2 = 1,
+  p_sim = 1200,
+  n_reps = 3,
+  seed = 1
+) {
+  if (!is.finite(c_X) || c_X <= 0 || !is.finite(tau2) || tau2 <= 0) {
+    return(NA_real_)
+  }
+  p_sim <- max(20L, as.integer(p_sim))
+  n_sim <- max(20L, as.integer(round(p_sim / c_X)))
+  p_sim <- max(1L, as.integer(round(c_X * n_sim)))
+  n_reps <- max(1L, as.integer(n_reps))
+  cache_key <- paste(signif(c_X, 12), signif(tau2, 12), p_sim, n_sim, n_reps, seed, sep = ":")
+  if (exists(cache_key, envir = .scscale_mp_median_cache, inherits = FALSE)) {
+    return(get(cache_key, envir = .scscale_mp_median_cache, inherits = FALSE))
+  }
+
+  old_seed <- if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
+    get(".Random.seed", envir = .GlobalEnv, inherits = FALSE)
+  } else {
+    NULL
+  }
+  on.exit({
+    if (is.null(old_seed)) {
+      if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
+        rm(".Random.seed", envir = .GlobalEnv)
+      }
+    } else {
+      assign(".Random.seed", old_seed, envir = .GlobalEnv)
+    }
+  }, add = TRUE)
+  set.seed(seed)
+
+  medians <- numeric(n_reps)
+  for (rep_i in seq_len(n_reps)) {
+    z <- matrix(stats::rnorm(p_sim * n_sim), nrow = p_sim, ncol = n_sim)
+    sv <- svd(t(z), nu = 0, nv = 0)$d
+    ev <- (sv^2) / n_sim
+    ev <- ev[is.finite(ev) & ev > 0]
+    medians[rep_i] <- stats::median(ev)
+  }
+  out <- tau2 * stats::median(medians)
+  assign(cache_key, out, envir = .scscale_mp_median_cache)
+  out
 }
 
 scscale_mp_cdf <- function(q, c_X, tau2 = 1, grid_n = 20000) {
@@ -279,11 +399,11 @@ scscale_mp_cdf <- function(q, c_X, tau2 = 1, grid_n = 20000) {
   out <- rep(NA_real_, length(q))
   if (!all(is.finite(edge))) return(out)
 
-  lower <- max(edge[["lower"]], 0) + 1e-12
-  upper <- edge[["upper"]] - 1e-12
-  x <- seq(lower, upper, length.out = grid_n)
+  lower <- max(edge[["lower"]], 0)
+  upper <- edge[["upper"]]
+  dx <- (upper - lower) / grid_n
+  x <- lower + (seq_len(grid_n) - 0.5) * dx
   density <- scscale_mp_density(x, c_X, tau2 = tau2, positive_only = TRUE)
-  dx <- c(diff(x), utils::tail(diff(x), 1))
   cdf <- cumsum(density * dx)
   cdf <- cdf / max(cdf)
 
@@ -314,14 +434,7 @@ scscale_mp_goodness <- function(
 
   edge <- scscale_mp_edges(c_X, tau2)
   prob <- (seq_len(m) - 0.5) / m
-  mp_q <- vapply(
-    prob,
-    scscale_mp_quantile,
-    numeric(1),
-    c_X = c_X,
-    tau2 = tau2,
-    grid_n = grid_n
-  )
+  mp_q <- scscale_mp_quantile_grid(c_X = c_X, prob = prob, tau2 = tau2, grid_n = grid_n)
   qq_rmse_log <- sqrt(mean((log(pmax(ev, eps)) - log(pmax(mp_q, eps)))^2))
 
   mp_cdf <- scscale_mp_cdf(ev, c_X = c_X, tau2 = tau2, grid_n = grid_n)
@@ -344,13 +457,24 @@ scscale_fit_mp_iterative <- function(
   eigenvalues,
   c_X = NULL,
   c_ratio = NULL,
-  max_iter = 50,
+  max_iter = 300,
   grid_n = 20000,
   stop_metric = c("qq_rmse_log", "ks", "neg_log_likelihood", "none"),
   stop_tol = 1e-4,
-  min_iter = 2
+  min_iter = 2,
+  median_method = c("sample", "integrate", "grid"),
+  mp_sample_p = 1200,
+  mp_sample_reps = 3,
+  mp_sample_seed = 1,
+  gap_z_threshold = 5,
+  quiet_z_threshold = 5,
+  quiet_run = 20,
+  background_skip = 25,
+  background_window = 500,
+  central_quantiles = c(0.10, 0.70)
 ) {
   stop_metric <- match.arg(stop_metric)
+  median_method <- match.arg(median_method)
   if (is.null(c_X)) c_X <- c_ratio
   if (is.null(c_X)) stop("c_X is required.", call. = FALSE)
   ev <- sort(eigenvalues[is.finite(eigenvalues) & eigenvalues > 0], decreasing = TRUE)
@@ -358,29 +482,102 @@ scscale_fit_mp_iterative <- function(
     stop("Need at least two positive eigenvalues to fit the MP bulk.", call. = FALSE)
   }
 
-  mp_median <- scscale_mp_quantile(c_X, prob = 0.5, tau2 = 1, grid_n = grid_n)
-  bulk_index <- seq_along(ev)
-  history <- vector("list", max_iter)
-  best_metric <- Inf
-  best_state <- NULL
-  stop_reason <- "max_iter"
+  mp_median <- switch(
+    median_method,
+    sample = scscale_mp_median_sample(
+      c_X,
+      tau2 = 1,
+      p_sim = mp_sample_p,
+      n_reps = mp_sample_reps,
+      seed = mp_sample_seed
+    ),
+    integrate = scscale_mp_quantile(c_X, prob = 0.5, tau2 = 1, grid_n = grid_n),
+    grid = scscale_mp_quantile_grid(c_X, prob = 0.5, tau2 = 1, grid_n = grid_n)
+  )
 
-  for (iter in seq_len(max_iter)) {
-    tau2 <- stats::median(ev[bulk_index]) / mp_median
+  k_max <- min(as.integer(max_iter), length(ev) - 20L)
+  if (k_max < 1L) {
+    tau2 <- stats::median(ev) / mp_median
     edge <- scscale_mp_edges(c_X, tau2)
-    next_bulk <- which(ev <= edge[["upper"]] & ev > 0)
-    spike_index <- which(ev > edge[["upper"]])
-    gof <- scscale_mp_goodness(ev[next_bulk], c_X = c_X, tau2 = tau2, grid_n = grid_n)
-    metric_value <- if (stop_metric == "none") NA_real_ else gof[[stop_metric]]
-    history[[iter]] <- data.frame(
-      iteration = iter,
+    gof <- scscale_mp_goodness(ev, c_X = c_X, tau2 = tau2, grid_n = grid_n)
+    history <- data.frame(
+      iteration = 1L,
+      K = 0L,
       tau2 = tau2,
       c_X = c_X,
       mp_lower = edge[["lower"]],
       lambda_plus = edge[["upper"]],
       mp_upper = edge[["upper"]],
-      n_bulk = length(next_bulk),
-      n_spikes = length(spike_index),
+      n_bulk = length(ev),
+      n_spikes = 0L,
+      log_gap = NA_real_,
+      background_gap_median = NA_real_,
+      background_gap_mad = NA_real_,
+      gap_z = NA_real_,
+      qq_rmse_log = gof$qq_rmse_log,
+      ks = gof$ks,
+      neg_log_likelihood = gof$neg_log_likelihood,
+      support_fraction = gof$support_fraction,
+      stop_metric = stop_metric,
+      stop_metric_value = if (stop_metric == "none") NA_real_ else gof[[stop_metric]]
+    )
+    return(list(
+      method = "median_mp_mad_gap",
+      tau2 = tau2,
+      c_X = c_X,
+      c_ratio = c_X,
+      mp_median = mp_median,
+      mp_lower = edge[["lower"]],
+      lambda_plus = edge[["upper"]],
+      mp_upper = edge[["upper"]],
+      bulk_index = seq_along(ev),
+      spike_index = integer(0),
+      iterations = 1L,
+      selected_iteration = 1L,
+      stop_metric = stop_metric,
+      stop_reason = "too_few_candidates",
+      history = history
+    ))
+  }
+
+  log_ev <- log(pmax(ev, 1e-12))
+  log_gaps <- log_ev[-length(log_ev)] - log_ev[-1L]
+  history <- vector("list", k_max)
+  for (K in seq_len(k_max)) {
+    bulk_index <- seq.int(K + 1L, length(ev))
+    tau2 <- stats::median(ev[bulk_index]) / mp_median
+    edge <- scscale_mp_edges(c_X, tau2)
+    gof <- scscale_mp_goodness(ev[bulk_index], c_X = c_X, tau2 = tau2, grid_n = grid_n)
+
+    prob <- (seq_along(bulk_index) - 0.5) / length(bulk_index)
+    mp_q <- scscale_mp_quantile_grid(c_X = c_X, prob = prob, tau2 = tau2, grid_n = grid_n)
+    bulk_inc <- sort(ev[bulk_index], decreasing = FALSE)
+    keep <- prob >= central_quantiles[1] & prob <= central_quantiles[2]
+    central_loss <- stats::median((log(pmax(bulk_inc[keep], 1e-12)) - log(pmax(mp_q[keep], 1e-12)))^2)
+
+    bg_start <- min(length(log_gaps), K + background_skip)
+    bg_end <- min(length(log_gaps), K + background_skip + background_window - 1L)
+    background_gaps <- log_gaps[bg_start:bg_end]
+    background_median <- stats::median(background_gaps, na.rm = TRUE)
+    background_mad <- stats::median(abs(background_gaps - background_median), na.rm = TRUE)
+    gap_z <- (log_gaps[K] - background_median) / (1.4826 * background_mad + 1e-12)
+
+    metric_value <- if (stop_metric == "none") NA_real_ else gof[[stop_metric]]
+    history[[K]] <- data.frame(
+      iteration = K,
+      K = K,
+      tau2 = tau2,
+      c_X = c_X,
+      mp_lower = edge[["lower"]],
+      lambda_plus = edge[["upper"]],
+      mp_upper = edge[["upper"]],
+      n_bulk = length(bulk_index),
+      n_spikes = K,
+      log_gap = log_gaps[K],
+      background_gap_median = background_median,
+      background_gap_mad = background_mad,
+      gap_z = gap_z,
+      central_qq_loss = central_loss,
       qq_rmse_log = gof$qq_rmse_log,
       ks = gof$ks,
       neg_log_likelihood = gof$neg_log_likelihood,
@@ -388,64 +585,33 @@ scscale_fit_mp_iterative <- function(
       stop_metric = stop_metric,
       stop_metric_value = metric_value
     )
-
-    meaningful_improvement <- FALSE
-    if (stop_metric != "none" && is.finite(metric_value)) {
-      meaningful_improvement <- is.null(best_state) || metric_value < best_metric - stop_tol
-    }
-    if (stop_metric != "none" && is.finite(metric_value) &&
-        (is.null(best_state) || metric_value < best_metric)) {
-      best_metric <- metric_value
-      best_state <- list(
-        tau2 = tau2,
-        edge = edge,
-        bulk_index = next_bulk,
-        spike_index = spike_index,
-        iteration = iter
-      )
-    }
-
-    if (identical(next_bulk, bulk_index)) {
-      stop_reason <- "bulk_stable"
-      if (is.null(best_state)) {
-        best_state <- list(
-          tau2 = tau2,
-          edge = edge,
-          bulk_index = next_bulk,
-          spike_index = spike_index,
-          iteration = iter
-        )
-      }
-      break
-    }
-    if (!length(next_bulk)) {
-      stop_reason <- "empty_bulk"
-      break
-    }
-    if (stop_metric != "none" && iter >= min_iter && is.finite(metric_value) && !meaningful_improvement &&
-        !is.null(best_state) && metric_value > best_metric - stop_tol) {
-      stop_reason <- "goodness_not_improving"
-      break
-    }
-    bulk_index <- next_bulk
   }
 
-  history <- do.call(rbind, history[seq_len(iter)])
-  if (is.null(best_state)) {
-    best_state <- list(
-      tau2 = tau2,
-      edge = edge,
-      bulk_index = next_bulk,
-      spike_index = spike_index,
-      iteration = iter
-    )
+  history <- do.call(rbind, history)
+  quiet_after <- vapply(seq_len(nrow(history)), function(i) {
+    j <- seq.int(i + 1L, min(nrow(history), i + quiet_run))
+    length(j) > 0 && all(history$gap_z[j] < quiet_z_threshold, na.rm = TRUE)
+  }, logical(1))
+  strong <- is.finite(history$gap_z) & history$gap_z >= gap_z_threshold
+  candidate <- history[strong & quiet_after, , drop = FALSE]
+  if (nrow(candidate) > 0L) {
+    selected <- candidate[which.max(candidate$K), , drop = FALSE]
+    stop_reason <- "last_strong_gap_before_quiet_region"
+  } else if (any(strong)) {
+    candidate <- history[strong, , drop = FALSE]
+    selected <- candidate[which.max(candidate$K), , drop = FALSE]
+    stop_reason <- "last_strong_gap"
+  } else {
+    selected <- history[which.max(history$gap_z), , drop = FALSE]
+    stop_reason <- "largest_gap_z_fallback"
   }
-  tau2 <- best_state$tau2
-  edge <- best_state$edge
-  bulk_index <- best_state$bulk_index
-  spike_index <- best_state$spike_index
+
+  tau2 <- selected$tau2
+  edge <- c(lower = selected$mp_lower, upper = selected$lambda_plus)
+  spike_index <- seq_len(selected$K)
+  bulk_index <- seq.int(selected$K + 1L, length(ev))
   list(
-    method = "iterative_median_mp",
+    method = "median_mp_mad_gap",
     tau2 = tau2,
     c_X = c_X,
     c_ratio = c_X,
@@ -455,11 +621,17 @@ scscale_fit_mp_iterative <- function(
     mp_upper = edge[["upper"]],
     bulk_index = bulk_index,
     spike_index = spike_index,
-    iterations = iter,
-    selected_iteration = best_state$iteration,
+    iterations = k_max,
+    selected_iteration = selected$iteration,
     stop_metric = stop_metric,
     stop_reason = stop_reason,
-    history = history
+    history = history,
+    gap_z_threshold = gap_z_threshold,
+    quiet_z_threshold = quiet_z_threshold,
+    quiet_run = quiet_run,
+    background_skip = background_skip,
+    background_window = background_window,
+    central_quantiles = central_quantiles
   )
 }
 
@@ -519,58 +691,6 @@ scscale_target_mi <- function(x, target, r = NULL, eps = 1e-12, use_irlba = TRUE
   empirical_mi(x, target, r = r_use, eps = eps, use_irlba = use_irlba)
 }
 
-scscale_theory_mi <- function(fit, target_fit, r = NULL, eps = 1e-12) {
-  if (!inherits(fit, "scscale_fit") || !inherits(target_fit, "scscale_fit")) {
-    stop("fit and target_fit must be scscale_fit objects.", call. = FALSE)
-  }
-  r_use <- r %||% min(length(fit$theta_X), length(target_fit$theta_X))
-  theta_X <- fit$theta_X[seq_len(min(r_use, length(fit$theta_X)))]
-  theta_Y <- target_fit$theta_X[seq_len(min(r_use, length(target_fit$theta_X)))]
-  m <- min(length(theta_X), length(theta_Y))
-  theta_double <- pmin(pmax(theta_X[seq_len(m)] * theta_Y[seq_len(m)], 0), 1 - eps)
-  I_theory <- -0.5 * sum(log1p(-theta_double))
-  list(
-    I_theory = I_theory,
-    mi = I_theory,
-    theta_X = theta_X[seq_len(m)],
-    theta_Y = theta_Y[seq_len(m)],
-    theta_x = theta_X[seq_len(m)],
-    theta_y = theta_Y[seq_len(m)],
-    theta_double = theta_double,
-    r = m
-  )
-}
-
-scscale_i_infinity <- function(x, y = NULL, r = NULL, eps = 1e-12) {
-  q_X <- if (inherits(x, "scscale_fit")) x$spikes$q_X else as.numeric(x)
-  q_Y <- if (inherits(y, "scscale_fit")) y$spikes$q_X else as.numeric(y)
-  if (is.null(q_Y)) {
-    stop("Provide y as a scscale_fit object or numeric q_Y vector.", call. = FALSE)
-  }
-
-  r_use <- r %||% min(length(q_X), length(q_Y))
-  m <- min(r_use, length(q_X), length(q_Y))
-  q_X <- q_X[seq_len(m)]
-  q_Y <- q_Y[seq_len(m)]
-  theta_X_infinity <- scscale_theta_infinity(q_X)
-  theta_Y_infinity <- scscale_theta_infinity(q_Y)
-  theta_double_infinity <- pmin(
-    pmax(theta_X_infinity * theta_Y_infinity, 0),
-    1 - eps
-  )
-
-  list(
-    I_infinity = -0.5 * sum(log1p(-theta_double_infinity)),
-    mi = -0.5 * sum(log1p(-theta_double_infinity)),
-    q_X = q_X,
-    q_Y = q_Y,
-    theta_X_infinity = theta_X_infinity,
-    theta_Y_infinity = theta_Y_infinity,
-    theta_double_infinity = theta_double_infinity,
-    r = m
-  )
-}
-
 scscale_mi <- function(
   fit,
   target_fit,
@@ -582,6 +702,7 @@ scscale_mi <- function(
   store_empirical_subspaces = FALSE,
   use_irlba = TRUE,
   r = NULL,
+  P = NULL,
   eps = 1e-12
 ) {
   if (!inherits(fit, "scscale_fit") || !inherits(target_fit, "scscale_fit")) {
@@ -593,17 +714,17 @@ scscale_mi <- function(
   theta_Y <- target_fit$theta_X[seq_len(m)]
   theta_Y_infinity <- target_fit$theta_infinity[seq_len(m)]
 
-  base <- scscale_information_from_theta(fit$theta_X[seq_len(m)], theta_Y, eps = eps)
-  theta_double <- pmin(pmax(fit$theta_X[seq_len(m)] * theta_Y, 0), 1 - eps)
-  infinite <- scscale_information_from_theta(
+  base_details <- scscale_low_rank_mi(fit$theta_X[seq_len(m)], theta_Y, P = P, eps = eps)
+  base <- base_details$mi
+  theta_double <- base_details$gamma
+  infinite_details <- scscale_low_rank_mi(
     fit$theta_infinity[seq_len(m)],
     theta_Y_infinity,
+    P = P,
     eps = eps
   )
-  theta_double_infinity <- pmin(
-    pmax(fit$theta_infinity[seq_len(m)] * theta_Y_infinity, 0),
-    1 - eps
-  )
+  infinite <- infinite_details$mi
+  theta_double_infinity <- infinite_details$gamma
 
   out <- list(
     I = base,
@@ -622,6 +743,9 @@ scscale_mi <- function(
       d2_Y = target_fit$spikes$d2_X[seq_len(m)],
       theta_double = theta_double,
       theta_double_infinity = theta_double_infinity,
+      sigma = base_details$sigma,
+      sigma_infinity = infinite_details$sigma,
+      P = if (is.null(P)) NULL else base_details$P,
       c_X = fit$c_X,
       c_Y = target_fit$c_X,
       lambda_plus_X = fit$bulk$lambda_plus,
@@ -666,10 +790,11 @@ scscale_mi <- function(
     out$cell_scaling <- stats::aggregate(
       I_theory ~ n + c_X,
       data = scscale_cell_scaling(
-        fit$spikes$d2_X[seq_len(m)],
+        fit$spikes$q_X[seq_len(m)],
         p = fit$p,
         n_grid = n_grid,
         theta_Y = theta_Y,
+        P = P,
         eps = eps
       ),
       FUN = unique
@@ -695,10 +820,10 @@ scscale_mi <- function(
         rate_rows <- umi_rows[umi_rows$sampling_rate == rate, , drop = FALSE]
         q_df <- unique(rate_rows[, c("rank", "q_X")])
         q_df <- q_df[order(q_df$rank), , drop = FALSE]
-        d2_X <- q_df$q_X[seq_len(min(m, nrow(q_df)))] / fit$c_X
+        q_X <- q_df$q_X[seq_len(min(m, nrow(q_df)))]
         curve <- stats::aggregate(
           I_theory ~ n + c_X,
-          data = scscale_cell_scaling(d2_X, p = fit$p, n_grid = n_grid, theta_Y = theta_Y, eps = eps),
+          data = scscale_cell_scaling(q_X, p = fit$p, n_grid = n_grid, theta_Y = theta_Y, P = P, eps = eps),
           FUN = unique
         )
         curve$sampling_rate <- rate
