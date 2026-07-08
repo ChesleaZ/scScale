@@ -18,6 +18,7 @@ adt_counts <- gse164378_3p_citeseq_hvg$adt_counts
 count_transform <- "log1p_cpm"
 
 sampling_rates <- c(0.10, 0.15, 0.20, 0.30, 0.40, 0.50, 0.70, 0.85, 1.00)
+joint_plot_rates <- c(0.20, 0.40, 0.50, 0.70, 1.00)
 n_grid <- c(500, 750, 1000, 1500, 2000, 3000, 4000)
 r_empirical <- 12
 ```
@@ -35,7 +36,7 @@ fit <- scscale_empirical_scaling_fit(
   n_grid = n_grid,
   sampling_rates = sampling_rates,
   r = r_empirical,
-  n_replicates = 1,
+  n_replicates = 3,
   n_ref = max(n_grid),
   U_ref = max(sampling_rates) * stats::median(Matrix::colSums(rna_counts)),
   joint_mode = "hybrid",
@@ -154,7 +155,7 @@ plot(
   main = "Empirical joint scaling by UMI level"
 )
 
-for (rho in sampling_rates) {
+for (rho in joint_plot_rates) {
   U_i <- rho_to_U$U[rho_to_U$sampling_rate == rho]
   obs_i <- grid[grid$sampling_rate == rho, ]
   obs_i <- obs_i[order(obs_i$n), ]
@@ -166,8 +167,8 @@ for (rho in sampling_rates) {
 
 legend(
   "bottomright",
-  legend = paste0("rho = ", sampling_rates),
-  col = rho_cols[as.character(sampling_rates)],
+  legend = paste0("rho = ", joint_plot_rates),
+  col = rho_cols[as.character(joint_plot_rates)],
   pch = 16,
   lwd = 2,
   bty = "n",
