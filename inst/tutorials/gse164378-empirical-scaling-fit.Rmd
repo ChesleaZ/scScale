@@ -175,30 +175,70 @@ legend(
 )
 ```
 
-## Grid and Residuals
+## Marginal And Joint Fit Check
 
-```{r grid-and-residuals, fig.width=7.2, fig.height=4.8}
+The two marginal fits should be compatible with the corresponding slices of
+the joint fit. Here we compare the cell-number marginal law with the joint law
+at full depth, and the UMI marginal law with the joint law at the full cell
+number.
+
+```{r grid-table}
 grid_out <- grid
 grid_out$I_fit <- fit$fitted
 grid_out$residual <- fit$residuals
 grid_out[, c("n", "sampling_rate", "U", "I_empirical", "I_fit", "residual", "r_eff")]
+```
+
+```{r marginal-joint-check, fig.width=11, fig.height=4.5}
+cell_joint_curve <- data.frame(n = n_curve, U = fit$reference$U_ref)
+cell_joint_curve$I_fit <- predict(fit, cell_joint_curve)
+
+umi_joint_curve <- data.frame(U = U_curve, sampling_rate = rho_curve, n = fit$reference$n_ref)
+umi_joint_curve$I_fit <- predict(fit, umi_joint_curve)
+
+old_par <- par(mfrow = c(1, 2), mar = c(4.2, 4.3, 2.8, 1))
+plot(
+  cell_obs$n,
+  cell_obs$I_empirical,
+  pch = 16,
+  col = "#0072B2",
+  xlab = "Cell number n",
+  ylab = expression(hat(I)(n~"|"~U[ref])),
+  main = "Cell marginal vs joint slice"
+)
+lines(cell_curve$n, cell_curve$I_fit, col = "#D55E00", lwd = 2)
+lines(cell_joint_curve$n, cell_joint_curve$I_fit, col = "#009E73", lwd = 2, lty = 2)
+legend(
+  "bottomright",
+  legend = c("empirical MI", "marginal fit", "joint slice"),
+  col = c("#0072B2", "#D55E00", "#009E73"),
+  pch = c(16, NA, NA),
+  lwd = c(NA, 2, 2),
+  lty = c(NA, 1, 2),
+  bty = "n",
+  cex = 0.9
+)
 
 plot(
-  grid_out$I_fit,
-  grid_out$residual,
+  umi_obs$sampling_rate,
+  umi_obs$I_empirical,
   pch = 16,
-  col = rho_cols[as.character(grid_out$sampling_rate)],
-  xlab = "Fitted I(n,U)",
-  ylab = "Residual",
-  main = "Joint empirical fit residuals"
+  col = "#0072B2",
+  xlab = expression("Sampling rate " * rho),
+  ylab = expression(hat(I)(U~"|"~n[ref])),
+  main = "UMI marginal vs joint slice"
 )
-abline(h = 0, lty = 2, col = "grey40")
+lines(umi_curve$sampling_rate, umi_curve$I_fit, col = "#D55E00", lwd = 2)
+lines(umi_joint_curve$sampling_rate, umi_joint_curve$I_fit, col = "#009E73", lwd = 2, lty = 2)
 legend(
-  "topright",
-  legend = paste0("rho = ", sampling_rates),
-  col = rho_cols[as.character(sampling_rates)],
-  pch = 16,
+  "bottomright",
+  legend = c("empirical MI", "marginal fit", "joint slice"),
+  col = c("#0072B2", "#D55E00", "#009E73"),
+  pch = c(16, NA, NA),
+  lwd = c(NA, 2, 2),
+  lty = c(NA, 1, 2),
   bty = "n",
-  cex = 0.85
+  cex = 0.9
 )
+par(old_par)
 ```
