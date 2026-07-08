@@ -18,7 +18,6 @@ adt_counts <- gse164378_3p_citeseq_hvg$adt_counts
 count_transform <- "log1p_cpm"
 
 joint_plot_rates <- c(0.20, 0.50, 1.00)
-n_grid <- c(500, 750, 1000, 1500, 2000, 3000, 4000)
 r_empirical <- 12
 available_cores <- parallel::detectCores(logical = TRUE)
 n_workers <- if (is.na(available_cores)) 2L else max(1L, min(4L, available_cores))
@@ -34,9 +33,7 @@ cell-number, UMI, and joint laws into one object.
 fit <- scscale_empirical_scaling_fit(
   rna_counts,
   adt_counts,
-  n_grid = n_grid,
   r = r_empirical,
-  n_ref = max(n_grid),
   joint_mode = "hybrid",
   seed = 164378,
   count_transform = count_transform,
@@ -51,6 +48,7 @@ The fitted joint law uses one global parameter set across the sampled grid.
 ```{r prepare-plot-data}
 grid <- fit$grid
 sampling_rates <- sort(unique(grid$sampling_rate))
+cell_sampling_rates <- sort(unique(grid$cell_sampling_rate))
 grid$sampling_rate_label <- factor(
   grid$sampling_rate,
   levels = sampling_rates,
@@ -102,23 +100,24 @@ The cell-number marginal fit uses the full-depth grid slice.
 
 ```{r cell-number-scaling, fig.width=6.8, fig.height=4.6}
 cell_obs <- subset(grid, abs(U - fit$reference$U_ref) < 1e-8)
-cell_obs <- summarize_mi(cell_obs, by = "n")
-cell_obs <- cell_obs[order(cell_obs$n), ]
+cell_obs <- summarize_mi(cell_obs, by = "cell_sampling_rate")
+cell_obs <- cell_obs[order(cell_obs$cell_sampling_rate), ]
 
-n_curve <- seq(min(n_grid), max(n_grid), length.out = 200)
-cell_curve <- data.frame(n = n_curve)
+cell_rate_curve <- seq(min(cell_sampling_rates), max(cell_sampling_rates), length.out = 200)
+n_curve <- cell_rate_curve * max(grid$n)
+cell_curve <- data.frame(cell_sampling_rate = cell_rate_curve, n = n_curve)
 cell_curve$I_fit <- predict(fit$cell_fit, cell_curve)
 
 plot(
   NA,
-  xlim = range(cell_obs$n),
+  xlim = range(cell_obs$cell_sampling_rate),
   ylim = range(c(cell_obs$I_empirical - cell_obs$I_sd, cell_obs$I_empirical + cell_obs$I_sd, cell_curve$I_fit), na.rm = TRUE),
-  xlab = "Cell number n",
+  xlab = expression("Cell sampling rate " * gamma),
   ylab = expression(hat(I)(n~"|"~U[ref])),
   main = "Empirical cell-number scaling"
 )
-draw_vertical_bars(cell_obs$n, cell_obs$I_empirical, cell_obs$I_sd, col = "#0072B2")
-lines(cell_curve$n, cell_curve$I_fit, col = "#D55E00", lwd = 2)
+draw_vertical_bars(cell_obs$cell_sampling_rate, cell_obs$I_empirical, cell_obs$I_sd, col = "#0072B2")
+lines(cell_curve$cell_sampling_rate, cell_curve$I_fit, col = "#D55E00", lwd = 2)
 legend(
   "bottomright",
   legend = c("empirical mean +/- sd", "empirical fit"),
@@ -169,12 +168,12 @@ The joint fit uses all grid points and one global parameter set. Each line below
 is the fitted cell-number scaling curve at one UMI sampling rate.
 
 ```{r joint-scaling-by-umi, fig.width=8, fig.height=5.2}
-joint_obs <- summarize_mi(grid, by = c("n", "sampling_rate", "U"))
+joint_obs <- summarize_mi(grid, by = c("cell_sampling_rate", "sampling_rate", "U"))
 plot(
   NA,
-  xlim = range(n_grid),
+  xlim = range(cell_sampling_rates),
   ylim = range(c(joint_obs$I_empirical - joint_obs$I_sd, joint_obs$I_empirical + joint_obs$I_sd, fit$fitted), na.rm = TRUE),
-  xlab = "Cell number n",
+  xlab = expression("Cell sampling rate " * gamma),
   ylab = expression(hat(I)(n,U)),
   main = "Empirical joint scaling by UMI level"
 )
@@ -182,11 +181,12 @@ plot(
 for (rho in joint_plot_rates) {
   U_i <- rho_to_U$U[rho_to_U$sampling_rate == rho]
   obs_i <- joint_obs[joint_obs$sampling_rate == rho, ]
-  obs_i <- obs_i[order(obs_i$n), ]
-  draw_vertical_bars(obs_i$n, obs_i$I_empirical, obs_i$I_sd, col = rho_cols[as.character(rho)])
-  pred_i <- data.frame(n = seq(min(n_grid), max(n_grid), length.out = 300), U = U_i)
+  obs_i <- obs_i[order(obs_i$cell_sampling_rate), ]
+  draw_vertical_bars(obs_i$cell_sampling_rate, obs_i$I_empirical, obs_i$I_sd, col = rho_cols[as.character(rho)])
+  pred_rate <- seq(min(cell_sampling_rates), max(cell_sampling_rates), length.out = 300)
+  pred_i <- data.frame(cell_sampling_rate = pred_rate, n = pred_rate * max(grid$n), U = U_i)
   pred_i$I_fit <- predict(fit, pred_i)
-  lines(pred_i$n, pred_i$I_fit, col = rho_cols[as.character(rho)], lwd = 2)
+  lines(pred_i$cell_sampling_rate, pred_i$I_fit, col = rho_cols[as.character(rho)], lwd = 2)
 }
 
 legend(
@@ -208,7 +208,7 @@ at full depth, and the UMI marginal law with the joint law at the full cell
 number.
 
 ```{r marginal-joint-check, fig.width=11, fig.height=4.5}
-cell_joint_curve <- data.frame(n = n_curve, U = fit$reference$U_ref)
+cell_joint_curve <- data.frame(cell_sampling_rate = cell_rate_curve, n = n_curve, U = fit$reference$U_ref)
 cell_joint_curve$I_fit <- predict(fit, cell_joint_curve)
 
 umi_joint_curve <- data.frame(U = U_curve, sampling_rate = rho_curve, n = fit$reference$n_ref)
@@ -217,15 +217,15 @@ umi_joint_curve$I_fit <- predict(fit, umi_joint_curve)
 old_par <- par(mfrow = c(1, 2), mar = c(4.2, 4.3, 2.8, 1))
 plot(
   NA,
-  xlim = range(cell_obs$n),
+  xlim = range(cell_obs$cell_sampling_rate),
   ylim = range(c(cell_obs$I_empirical - cell_obs$I_sd, cell_obs$I_empirical + cell_obs$I_sd, cell_curve$I_fit, cell_joint_curve$I_fit), na.rm = TRUE),
-  xlab = "Cell number n",
+  xlab = expression("Cell sampling rate " * gamma),
   ylab = expression(hat(I)(n~"|"~U[ref])),
   main = "Cell marginal vs joint slice"
 )
-draw_vertical_bars(cell_obs$n, cell_obs$I_empirical, cell_obs$I_sd, col = "#0072B2")
-lines(cell_curve$n, cell_curve$I_fit, col = "#D55E00", lwd = 2)
-lines(cell_joint_curve$n, cell_joint_curve$I_fit, col = "#009E73", lwd = 2, lty = 2)
+draw_vertical_bars(cell_obs$cell_sampling_rate, cell_obs$I_empirical, cell_obs$I_sd, col = "#0072B2")
+lines(cell_curve$cell_sampling_rate, cell_curve$I_fit, col = "#D55E00", lwd = 2)
+lines(cell_joint_curve$cell_sampling_rate, cell_joint_curve$I_fit, col = "#009E73", lwd = 2, lty = 2)
 legend(
   "bottomright",
   legend = c("empirical mean +/- sd", "marginal fit", "joint slice"),

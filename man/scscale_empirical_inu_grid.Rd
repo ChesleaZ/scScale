@@ -2,7 +2,9 @@
 \alias{scscale_empirical_inu_grid}
 \title{Sample an Empirical I(n, U) Grid}
 \usage{
-scscale_empirical_inu_grid(x, target, n_grid, U_grid = NULL,
+scscale_empirical_inu_grid(x, target, n_grid = NULL,
+  cell_sampling_rates = c(0.125, 0.1875, 0.25, 0.375, 0.50, 0.75,
+  1.00), U_grid = NULL,
   sampling_rates = c(0.10, 0.15, 0.20, 0.30, 0.40, 0.50, 0.70, 0.85,
   1.00), r = 10, n_replicates = 10, n_workers = 1, seed = 1,
   input = c("counts", "normalized"), target_input = input,
@@ -13,7 +15,10 @@ scscale_empirical_inu_grid(x, target, n_grid, U_grid = NULL,
 \arguments{
 \item{x}{Feature-by-cell source matrix.}
 \item{target}{Feature-by-cell target matrix or cell-level target vector.}
-\item{n_grid}{Cell numbers to sample.}
+\item{n_grid}{Cell numbers to sample. Provide either \code{n_grid} or
+\code{cell_sampling_rates}. If \code{n_grid} is supplied and
+\code{cell_sampling_rates} is omitted, the default cell-rate grid is ignored.}
+\item{cell_sampling_rates}{Cell downsampling fractions in \code{(0,1]}.}
 \item{U_grid}{Target UMI depths per cell. Provide either \code{U_grid} or
 \code{sampling_rates}. If \code{U_grid} is supplied and \code{sampling_rates}
 is omitted, the default sampling-rate grid is ignored.}
@@ -34,7 +39,8 @@ MI for each \code{(n,U)} grid point.  This is the direct empirical counterpart
 to spike-model scaling workflows.
 }
 \value{
-A data frame with sampled \code{n}, requested \code{U}, replicate index,
-\code{I_empirical}, effective MI rank, and observed UMI summaries.
+A data frame with sampled \code{n}, requested \code{cell_sampling_rate},
+requested \code{U}, replicate index, \code{I_empirical}, effective MI rank,
+and observed UMI summaries.
 }
 \keyword{models}

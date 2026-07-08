@@ -9,7 +9,9 @@
 \alias{scscale_empirical_joint_curve}
 \title{Fit Direct Empirical Scaling Laws}
 \usage{
-scscale_empirical_scaling_fit(x, target, n_grid, U_grid = NULL,
+scscale_empirical_scaling_fit(x, target, n_grid = NULL,
+  cell_sampling_rates = c(0.125, 0.1875, 0.25, 0.375, 0.50, 0.75,
+  1.00), U_grid = NULL,
   sampling_rates = c(0.10, 0.15, 0.20, 0.30, 0.40, 0.50, 0.70, 0.85,
   1.00), r = 10, n_replicates = 10, n_workers = 1, n_ref = NULL,
   U_ref = NULL, joint_mode = c("hybrid", "transfer", "free"),
@@ -44,7 +46,10 @@ scscale_empirical_joint_curve(n, U, I_infinity, C_n, A_n, C_U, A_U,
 \arguments{
 \item{x}{Feature-by-cell source matrix.}
 \item{target}{Feature-by-cell target matrix or cell-level target vector.}
-\item{n_grid}{Cell numbers to sample.}
+\item{n_grid}{Cell numbers to sample. Provide either \code{n_grid} or
+\code{cell_sampling_rates}. If \code{n_grid} is supplied and
+\code{cell_sampling_rates} is omitted, the default cell-rate grid is ignored.}
+\item{cell_sampling_rates}{Cell downsampling fractions in \code{(0,1]}.}
 \item{U_grid}{Target UMI depths per cell. Provide either \code{U_grid} or
 \code{sampling_rates}. If \code{U_grid} is supplied and \code{sampling_rates}
 is omitted, the default sampling-rate grid is ignored.}

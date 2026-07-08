@@ -299,7 +299,8 @@ scscale_nearest_grid_value <- function(values, target, label) {
 scscale_empirical_scaling_fit <- function(
   x,
   target,
-  n_grid,
+  n_grid = NULL,
+  cell_sampling_rates = c(0.125, 0.1875, 0.25, 0.375, 0.50, 0.75, 1.00),
   U_grid = NULL,
   sampling_rates = c(0.10, 0.15, 0.20, 0.30, 0.40, 0.50, 0.70, 0.85, 1.00),
   r = 10,
@@ -331,11 +332,15 @@ scscale_empirical_scaling_fit <- function(
   if (!is.null(U_grid) && missing(sampling_rates)) {
     sampling_rates <- NULL
   }
+  if (!is.null(n_grid) && missing(cell_sampling_rates)) {
+    cell_sampling_rates <- NULL
+  }
 
   grid <- scscale_empirical_inu_grid(
     x = x,
     target = target,
     n_grid = n_grid,
+    cell_sampling_rates = cell_sampling_rates,
     U_grid = U_grid,
     sampling_rates = sampling_rates,
     r = r,
@@ -426,7 +431,8 @@ scscale_empirical_scaling_fit <- function(
 scscale_empirical_inu_grid <- function(
   x,
   target,
-  n_grid,
+  n_grid = NULL,
+  cell_sampling_rates = c(0.125, 0.1875, 0.25, 0.375, 0.50, 0.75, 1.00),
   U_grid = NULL,
   sampling_rates = c(0.10, 0.15, 0.20, 0.30, 0.40, 0.50, 0.70, 0.85, 1.00),
   r = 10,
@@ -448,14 +454,16 @@ scscale_empirical_inu_grid <- function(
   if (!is.null(U_grid) && missing(sampling_rates)) {
     sampling_rates <- NULL
   }
+  if (!is.null(n_grid) && missing(cell_sampling_rates)) {
+    cell_sampling_rates <- NULL
+  }
+  if (is.null(n_grid) && is.null(cell_sampling_rates)) stop("Provide n_grid or cell_sampling_rates.", call. = FALSE)
+  if (!is.null(n_grid) && !is.null(cell_sampling_rates)) stop("Provide only one of n_grid or cell_sampling_rates.", call. = FALSE)
   if (is.null(U_grid) && is.null(sampling_rates)) stop("Provide U_grid or sampling_rates.", call. = FALSE)
   if (!is.null(U_grid) && !is.null(sampling_rates)) stop("Provide only one of U_grid or sampling_rates.", call. = FALSE)
 
   x <- counts_matrix(x)
   if (is.null(colnames(x))) colnames(x) <- paste0("cell_", seq_len(ncol(x)))
-  n_grid <- sort(unique(as.integer(n_grid)))
-  n_grid <- n_grid[is.finite(n_grid) & n_grid > 1L]
-  if (!length(n_grid)) stop("n_grid must contain positive cell counts.", call. = FALSE)
   n_replicates <- as.integer(n_replicates)
   if (!is.finite(n_replicates) || n_replicates < 1L) stop("n_replicates must be positive.", call. = FALSE)
   n_workers <- as.integer(n_workers)
@@ -471,6 +479,21 @@ scscale_empirical_inu_grid <- function(
     target <- target[, common, drop = FALSE]
   } else {
     target <- align_vector_to_cells(target, colnames(x), "target")
+  }
+
+  if (!is.null(cell_sampling_rates)) {
+    cell_sampling_rates <- sort(unique(as.numeric(cell_sampling_rates)))
+    if (any(!is.finite(cell_sampling_rates) | cell_sampling_rates <= 0 | cell_sampling_rates > 1)) {
+      stop("cell_sampling_rates must be in (0, 1].", call. = FALSE)
+    }
+    n_grid <- sort(unique(pmax(2L, as.integer(round(cell_sampling_rates * ncol(x))))))
+    cell_sampling_rates <- n_grid / ncol(x)
+  } else {
+    n_grid <- sort(unique(as.integer(n_grid)))
+    n_grid <- n_grid[is.finite(n_grid) & n_grid > 1L]
+    if (!length(n_grid)) stop("n_grid must contain positive cell counts.", call. = FALSE)
+    if (any(n_grid > ncol(x))) stop("n_grid cannot exceed the number of aligned cells.", call. = FALSE)
+    cell_sampling_rates <- n_grid / ncol(x)
   }
 
   if (!is.null(sampling_rates)) {
@@ -536,6 +559,7 @@ scscale_empirical_inu_grid <- function(
     )
     data.frame(
       n = ncol(x_view),
+      cell_sampling_rate = task$n_target / ncol(x),
       U = task$U,
       sampling_rate = task$rate,
       replicate = task$replicate,
