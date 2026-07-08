@@ -400,6 +400,12 @@ scscale_empirical_scaling_fit <- function(
   ceiling <- c(ceiling, max_abs_gap_to_joint = max(abs(ceiling[c("from_cell_marginal", "from_umi_marginal")] - ceiling[["joint_fit"]])))
 
   fitted <- stats::predict(joint_fit, grid)
+  n_total <- max(grid$n / grid$cell_sampling_rate, na.rm = TRUE)
+  U_total <- if (any(is.finite(grid$sampling_rate))) {
+    max(grid$U / grid$sampling_rate, na.rm = TRUE)
+  } else {
+    NA_real_
+  }
   out <- list(
     call = match.call(),
     grid = grid,
@@ -408,6 +414,7 @@ scscale_empirical_scaling_fit <- function(
     joint_fit = joint_fit,
     ceiling = ceiling,
     reference = list(n_ref = n_ref, U_ref = U_ref),
+    sampling = list(n_total = n_total, U_total = U_total),
     r = r,
     n_replicates = n_replicates,
     n_workers = n_workers,
@@ -584,6 +591,234 @@ scscale_empirical_inu_grid <- function(
   out <- do.call(rbind, rows)
   if (is.null(out)) stop("No grid rows were produced; check n_grid and U_grid eligibility.", call. = FALSE)
   out
+}
+
+scscale_check_empirical_inu_fit <- function(object) {
+  if (!inherits(object, "scscale_empirical_inu_fit")) {
+    stop("object must be a scscale_empirical_inu_fit.", call. = FALSE)
+  }
+  invisible(object)
+}
+
+scscale_empirical_n_total <- function(object) {
+  n_total <- object$sampling$n_total
+  if (is.null(n_total) || !is.finite(n_total)) {
+    n_total <- max(object$grid$n / object$grid$cell_sampling_rate, na.rm = TRUE)
+  }
+  n_total
+}
+
+scscale_empirical_U_total <- function(object) {
+  U_total <- object$sampling$U_total
+  if (is.null(U_total) || !is.finite(U_total)) {
+    ok <- is.finite(object$grid$sampling_rate) & object$grid$sampling_rate > 0
+    U_total <- if (any(ok)) max(object$grid$U[ok] / object$grid$sampling_rate[ok], na.rm = TRUE) else max(object$grid$U, na.rm = TRUE)
+  }
+  U_total
+}
+
+scscale_resolve_cell_input <- function(object, cell_sampling_rate = NULL, n = NULL, n_points = NULL) {
+  n_total <- scscale_empirical_n_total(object)
+  if (!is.null(cell_sampling_rate) && !is.null(n)) {
+    stop("Provide only one of cell_sampling_rate or n.", call. = FALSE)
+  }
+  if (is.null(cell_sampling_rate) && is.null(n)) {
+    if (is.null(n_points)) {
+      cell_sampling_rate <- sort(unique(object$grid$cell_sampling_rate))
+    } else {
+      cell_sampling_rate <- seq(min(object$grid$cell_sampling_rate), max(object$grid$cell_sampling_rate), length.out = n_points)
+    }
+    n <- cell_sampling_rate * n_total
+  } else if (!is.null(cell_sampling_rate)) {
+    cell_sampling_rate <- as.numeric(cell_sampling_rate)
+    n <- cell_sampling_rate * n_total
+  } else {
+    n <- as.numeric(n)
+    cell_sampling_rate <- n / n_total
+  }
+  if (any(!is.finite(n) | n <= 0) || any(!is.finite(cell_sampling_rate) | cell_sampling_rate <= 0)) {
+    stop("cell_sampling_rate and n must be positive and finite.", call. = FALSE)
+  }
+  data.frame(cell_sampling_rate = cell_sampling_rate, n = n)
+}
+
+scscale_resolve_umi_input <- function(object, sampling_rate = NULL, U = NULL, n_points = NULL) {
+  U_total <- scscale_empirical_U_total(object)
+  if (!is.null(sampling_rate) && !is.null(U)) {
+    stop("Provide only one of sampling_rate or U.", call. = FALSE)
+  }
+  if (is.null(sampling_rate) && is.null(U)) {
+    rates <- object$grid$sampling_rate
+    rates <- rates[is.finite(rates)]
+    if (is.null(n_points)) {
+      sampling_rate <- sort(unique(rates))
+    } else {
+      sampling_rate <- seq(min(rates), max(rates), length.out = n_points)
+    }
+    U <- sampling_rate * U_total
+  } else if (!is.null(sampling_rate)) {
+    sampling_rate <- as.numeric(sampling_rate)
+    U <- sampling_rate * U_total
+  } else {
+    U <- as.numeric(U)
+    sampling_rate <- U / U_total
+  }
+  if (any(!is.finite(U) | U <= 0) || any(!is.finite(sampling_rate) | sampling_rate <= 0)) {
+    stop("sampling_rate and U must be positive and finite.", call. = FALSE)
+  }
+  data.frame(sampling_rate = sampling_rate, U = U)
+}
+
+scscale_empirical_summary <- function(data, by, y = "I_empirical") {
+  mean_df <- stats::aggregate(stats::as.formula(paste(y, "~", paste(by, collapse = " + "))), data = data, FUN = mean)
+  sd_df <- stats::aggregate(stats::as.formula(paste(y, "~", paste(by, collapse = " + "))), data = data, FUN = stats::sd)
+  n_df <- stats::aggregate(stats::as.formula(paste("replicate ~", paste(by, collapse = " + "))), data = data, FUN = function(x) length(unique(x)))
+  mean_df$I_sd <- sd_df[[y]]
+  mean_df$n_replicates <- n_df$replicate
+  mean_df
+}
+
+scscale_draw_interval_bars <- function(x, y, sd, col, cap = NULL, lwd = 1.6) {
+  sd[!is.finite(sd)] <- 0
+  if (is.null(cap)) cap <- diff(range(x)) * 0.012
+  graphics::segments(x, y - sd, x, y + sd, col = col, lwd = lwd)
+  graphics::segments(x - cap, y - sd, x + cap, y - sd, col = col, lwd = lwd)
+  graphics::segments(x - cap, y + sd, x + cap, y + sd, col = col, lwd = lwd)
+}
+
+scscale_empirical_values <- function(object, summarize = FALSE) {
+  scscale_check_empirical_inu_fit(object)
+  out <- object$grid
+  out$I_fit <- object$fitted
+  out$residual <- object$residuals
+  if (!summarize) return(out)
+  summary <- scscale_empirical_summary(out, by = c("cell_sampling_rate", "sampling_rate", "U"))
+  fit_summary <- stats::aggregate(I_fit ~ cell_sampling_rate + sampling_rate + U, data = out, FUN = mean)
+  residual_summary <- stats::aggregate(residual ~ cell_sampling_rate + sampling_rate + U, data = out, FUN = mean)
+  summary$I_fit <- fit_summary$I_fit
+  summary$residual <- residual_summary$residual
+  summary
+}
+
+scscale_empirical_parameters <- function(object) {
+  scscale_check_empirical_inu_fit(object)
+  rows <- list(
+    cell = object$cell_fit$coefficients,
+    umi = object$umi_fit$coefficients,
+    joint = c(object$joint_fit$coefficients, object$joint_fit$fixed),
+    ceiling = object$ceiling
+  )
+  out <- do.call(rbind, lapply(names(rows), function(model) {
+    data.frame(model = model, parameter = names(rows[[model]]), value = as.numeric(rows[[model]]), row.names = NULL)
+  }))
+  row.names(out) <- NULL
+  out
+}
+
+scscale_predict_empirical_cell <- function(object, cell_sampling_rate = NULL, n = NULL, n_points = NULL) {
+  scscale_check_empirical_inu_fit(object)
+  out <- scscale_resolve_cell_input(object, cell_sampling_rate = cell_sampling_rate, n = n, n_points = n_points)
+  out$I_fit <- stats::predict(object$cell_fit, out)
+  out
+}
+
+scscale_predict_empirical_umi <- function(object, sampling_rate = NULL, U = NULL, n_points = NULL) {
+  scscale_check_empirical_inu_fit(object)
+  out <- scscale_resolve_umi_input(object, sampling_rate = sampling_rate, U = U, n_points = n_points)
+  out$I_fit <- stats::predict(object$umi_fit, out)
+  out
+}
+
+scscale_predict_empirical_joint <- function(
+  object,
+  cell_sampling_rate = NULL,
+  n = NULL,
+  sampling_rate = NULL,
+  U = NULL,
+  cell_points = NULL,
+  umi_points = NULL
+) {
+  scscale_check_empirical_inu_fit(object)
+  cell <- scscale_resolve_cell_input(object, cell_sampling_rate = cell_sampling_rate, n = n, n_points = cell_points)
+  umi <- scscale_resolve_umi_input(object, sampling_rate = sampling_rate, U = U, n_points = umi_points)
+  out <- merge(cell, umi, by = NULL)
+  out$I_fit <- stats::predict(object, out)
+  out
+}
+
+scscale_plot_empirical_fit <- function(object, type = c("both", "cell", "umi"), n_points = 200, ...) {
+  scscale_check_empirical_inu_fit(object)
+  type <- match.arg(type)
+  old_par <- NULL
+  if (type == "both") {
+    old_par <- graphics::par(mfrow = c(1, 2), mar = c(4.2, 4.3, 2.8, 1))
+    on.exit(graphics::par(old_par), add = TRUE)
+  }
+  if (type %in% c("both", "cell")) {
+    obs <- object$grid[abs(object$grid$U - object$reference$U_ref) < 1e-8, , drop = FALSE]
+    obs <- scscale_empirical_summary(obs, by = "cell_sampling_rate")
+    curve <- scscale_predict_empirical_cell(object, n_points = n_points)
+    graphics::plot(
+      NA,
+      xlim = range(obs$cell_sampling_rate),
+      ylim = range(c(obs$I_empirical - obs$I_sd, obs$I_empirical + obs$I_sd, curve$I_fit), na.rm = TRUE),
+      xlab = "Cell sampling rate",
+      ylab = "Empirical MI",
+      main = "Cell-number scaling",
+      ...
+    )
+    scscale_draw_interval_bars(obs$cell_sampling_rate, obs$I_empirical, obs$I_sd, col = "#0072B2")
+    graphics::lines(curve$cell_sampling_rate, curve$I_fit, col = "#D55E00", lwd = 2)
+    graphics::legend("bottomright", legend = c("empirical mean +/- sd", "fit"), col = c("#0072B2", "#D55E00"), lwd = c(1.6, 2), bty = "n")
+  }
+  if (type %in% c("both", "umi")) {
+    obs <- object$grid[object$grid$n == object$reference$n_ref, , drop = FALSE]
+    obs <- scscale_empirical_summary(obs, by = c("sampling_rate", "U"))
+    curve <- scscale_predict_empirical_umi(object, n_points = n_points)
+    graphics::plot(
+      NA,
+      xlim = range(obs$sampling_rate),
+      ylim = range(c(obs$I_empirical - obs$I_sd, obs$I_empirical + obs$I_sd, curve$I_fit), na.rm = TRUE),
+      xlab = "UMI sampling rate",
+      ylab = "Empirical MI",
+      main = "UMI scaling",
+      ...
+    )
+    scscale_draw_interval_bars(obs$sampling_rate, obs$I_empirical, obs$I_sd, col = "#0072B2")
+    graphics::lines(curve$sampling_rate, curve$I_fit, col = "#D55E00", lwd = 2)
+    graphics::legend("bottomright", legend = c("empirical mean +/- sd", "fit"), col = c("#0072B2", "#D55E00"), lwd = c(1.6, 2), bty = "n")
+  }
+  invisible(object)
+}
+
+scscale_plot_empirical_umi_levels <- function(object, sampling_rate = NULL, U = NULL, n_points = 300, ...) {
+  scscale_check_empirical_inu_fit(object)
+  if (is.null(sampling_rate) && is.null(U)) sampling_rate <- c(0.20, 0.50, 1.00)
+  umi <- scscale_resolve_umi_input(object, sampling_rate = sampling_rate, U = U)
+  obs <- scscale_empirical_summary(object$grid, by = c("cell_sampling_rate", "sampling_rate", "U"))
+  cols <- grDevices::hcl.colors(nrow(umi), palette = "Dark 3")
+  curve <- scscale_predict_empirical_joint(object, sampling_rate = umi$sampling_rate, cell_points = n_points)
+  graphics::plot(
+    NA,
+    xlim = range(object$grid$cell_sampling_rate),
+    ylim = range(c(obs$I_empirical - obs$I_sd, obs$I_empirical + obs$I_sd, curve$I_fit), na.rm = TRUE),
+    xlab = "Cell sampling rate",
+    ylab = "Empirical MI",
+    main = "Joint scaling by UMI level",
+    ...
+  )
+  for (i in seq_len(nrow(umi))) {
+    obs_i <- obs[abs(obs$U - umi$U[[i]]) < 1e-8, , drop = FALSE]
+    obs_i <- obs_i[order(obs_i$cell_sampling_rate), ]
+    if (nrow(obs_i)) {
+      scscale_draw_interval_bars(obs_i$cell_sampling_rate, obs_i$I_empirical, obs_i$I_sd, col = cols[[i]])
+    }
+    curve_i <- curve[abs(curve$U - umi$U[[i]]) < 1e-8, , drop = FALSE]
+    curve_i <- curve_i[order(curve_i$cell_sampling_rate), ]
+    graphics::lines(curve_i$cell_sampling_rate, curve_i$I_fit, col = cols[[i]], lwd = 2)
+  }
+  graphics::legend("bottomright", legend = paste0("rho = ", signif(umi$sampling_rate, 3)), col = cols, lwd = 2, bty = "n", cex = 0.85)
+  invisible(object)
 }
 
 predict.scscale_empirical_scaling_fit <- function(object, newdata = NULL, ...) {
