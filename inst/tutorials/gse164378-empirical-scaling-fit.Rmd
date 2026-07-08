@@ -81,8 +81,8 @@ scscale_plot_empirical_umi_levels(fit, sampling_rate = c(0.20, 0.50, 1.00))
 ```{r joint-scaling-extrapolation, fig.width=8, fig.height=5.2}
 extrapolated_joint <- scscale_predict_empirical_joint(
   fit,
-  cell_sampling_rate = seq(1.00, 2.00, length.out = 300),
-  sampling_rate = c(1.00, 1.50, 2.00)
+  cell_sampling_rate = seq(1e-3, 2.00, length.out = 400),
+  sampling_rate = c(0.20, 0.50, 1.00, 2.00, 4.00)
 )
 
 rho_levels <- sort(unique(extrapolated_joint$sampling_rate))
@@ -90,7 +90,7 @@ rho_cols <- setNames(grDevices::hcl.colors(length(rho_levels), "Dark 3"), rho_le
 
 plot(
   NA,
-  xlim = range(extrapolated_joint$cell_sampling_rate),
+  xlim = c(0, 2),
   ylim = range(extrapolated_joint$I_fit),
   xlab = expression("Cell sampling rate " * gamma),
   ylab = expression(hat(I)(n,U)),
