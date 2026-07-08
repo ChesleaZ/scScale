@@ -46,7 +46,7 @@ scscale_fit_mp_iterative(eigenvalues, c_X = NULL, c_ratio = NULL,
   stop_tol = 1e-4, min_iter = 2,
   median_method = c("sample", "integrate", "grid"),
   mp_sample_p = 1200, mp_sample_reps = 3, mp_sample_seed = 1,
-  gap_z_threshold = 5, quiet_z_threshold = 5, quiet_run = 20,
+  gap_z_threshold = 6, quiet_z_threshold = 5, quiet_run = 20,
   background_skip = 25, background_window = 500,
   central_quantiles = c(0.10, 0.70))
 
@@ -66,7 +66,7 @@ scscale_recoverability(q, c_X = NULL, c_ratio = NULL)
 
 scscale_spectrum(x, input = "normalized", n = NULL, p = NULL)
 
-scscale_spike_table(eigenvalues, bulk, r = NULL)
+scscale_spike_table(eigenvalues, bulk, r = NULL, force_spikes = FALSE)
 
 scscale_theta_infinity(q)
 
@@ -87,6 +87,8 @@ scscale_umi_scaling(counts, U_grid = NULL, sampling_rates = NULL, r = 10,
 \item{d2_X, p, n_grid, theta_Y, P, q}{Spike and MI scaling quantities.}
 \item{U, fraction, seed, n_replicates}{Downsampling controls.}
 \item{eigenvalues, c_X, c_ratio, tau2, bulk}{MP bulk and spike-fit quantities.}
+\item{force_spikes}{Whether to force the retained top components to be treated
+as spikes.}
 \item{max_iter, grid_n, stop_metric, stop_tol, min_iter, median_method,
 mp_sample_p, mp_sample_reps, mp_sample_seed, gap_z_threshold,
 quiet_z_threshold, quiet_run, background_skip, background_window,

@@ -2,8 +2,8 @@
 \alias{scscale_cell_number_mi}
 \title{Fit Cell-Number MI Scaling}
 \usage{
-scscale_cell_number_mi(pair, n_grid, q_X = pair$x_fit$spikes$q_X,
-  P = pair$P)
+scscale_cell_number_mi(pair, n_grid,
+  q_X = pair$x_fit$spikes$q_X[seq_len(pair$r_X)], P = pair$P)
 }
 \arguments{
 \item{pair}{A \code{\link{scscale_pair_fit}} object.}

@@ -18,10 +18,21 @@ scscale_fit <- function(
   mp_stop_metric = c("qq_rmse_log", "ks", "neg_log_likelihood", "none"),
   mp_stop_tol = 1e-4,
   mp_min_iter = 2,
+  mp_gap_z_threshold = 6,
+  mp_quiet_z_threshold = 5,
+  mp_quiet_run = 20,
+  mp_background_skip = 25,
+  mp_background_window = 500,
+  mp_central_quantiles = c(0.10, 0.70),
   r = NULL,
+  force_spikes = FALSE,
   fit_umi = input[1] == "counts",
   sampling_rates = c(0.10, 0.20, 0.35, 0.50, 0.70, 0.85, 1.00),
   U_grid = NULL,
+  umi_linear_intercept = NULL,
+  umi_linear_slope = NULL,
+  umi_reference_U = NULL,
+  umi_clamp_rate = TRUE,
   umi_seed = 1,
   umi_replicates = 1,
   store_matrix = FALSE,
@@ -53,9 +64,15 @@ scscale_fit <- function(
     grid_n = mp_grid_n,
     stop_metric = mp_stop_metric,
     stop_tol = mp_stop_tol,
-    min_iter = mp_min_iter
+    min_iter = mp_min_iter,
+    gap_z_threshold = mp_gap_z_threshold,
+    quiet_z_threshold = mp_quiet_z_threshold,
+    quiet_run = mp_quiet_run,
+    background_skip = mp_background_skip,
+    background_window = mp_background_window,
+    central_quantiles = mp_central_quantiles
   )
-  spikes <- scscale_spike_table(spectrum$lambda, bulk, r = r)
+  spikes <- scscale_spike_table(spectrum$lambda, bulk, r = r, force_spikes = force_spikes)
   recoverability <- scscale_recoverability(spikes$q_X, c_X = prepared$p / prepared$n)
   recoverability_infinity <- scscale_theta_infinity(spikes$q_X)
   spike_keep <- if (is.null(r)) seq_len(nrow(spikes)) else seq_len(min(r, nrow(spikes)))
@@ -70,6 +87,7 @@ scscale_fit <- function(
     normalization = prepared$normalization,
     features = prepared$features,
     spectrum = spectrum,
+    left_vectors = attr(spectrum, "u"),
     bulk = bulk,
     spikes = spikes,
     theta_X = recoverability,
@@ -98,26 +116,43 @@ scscale_fit <- function(
     if (input != "counts") {
       stop("fit_umi = TRUE requires input = 'counts'.", call. = FALSE)
     }
-    object$umi_scaling <- scscale_umi_scaling(
-      x,
-      U_grid = U_grid,
-      sampling_rates = sampling_rates,
-      r = object$r,
-      target_depth = target_depth,
-      count_transform = count_transform,
-      center = center,
-      scale = scale,
-      n_features = n_features,
-      min_cells = min_cells,
-      seed = umi_seed,
-      n_replicates = umi_replicates,
-      theta_Y = if (is.null(target_fit)) NULL else target_fit$theta_X,
-      reference_fit = object,
-      empirical = FALSE,
-      use_irlba = use_irlba,
-      mp_max_iter = mp_max_iter,
-      mp_grid_n = mp_grid_n
-    )
+    if (!is.null(umi_linear_intercept) || !is.null(umi_linear_slope)) {
+      if (is.null(umi_linear_intercept) || is.null(umi_linear_slope)) {
+        stop("Provide both umi_linear_intercept and umi_linear_slope.", call. = FALSE)
+      }
+      object$umi_scaling <- scscale_linear_umi_scaling(
+        object,
+        U_grid = U_grid,
+        sampling_rates = sampling_rates,
+        reference_U = umi_reference_U,
+        intercept = umi_linear_intercept,
+        slope = umi_linear_slope,
+        r = object$r,
+        theta_Y = if (is.null(target_fit)) NULL else target_fit$theta_X,
+        clamp_rate = umi_clamp_rate
+      )
+    } else {
+      object$umi_scaling <- scscale_umi_scaling(
+        x,
+        U_grid = U_grid,
+        sampling_rates = sampling_rates,
+        r = object$r,
+        target_depth = target_depth,
+        count_transform = count_transform,
+        center = center,
+        scale = scale,
+        n_features = n_features,
+        min_cells = min_cells,
+        seed = umi_seed,
+        n_replicates = umi_replicates,
+        theta_Y = if (is.null(target_fit)) NULL else target_fit$theta_X,
+        reference_fit = object,
+        empirical = FALSE,
+        use_irlba = use_irlba,
+        mp_max_iter = mp_max_iter,
+        mp_grid_n = mp_grid_n
+      )
+    }
   }
 
   object
@@ -163,13 +198,22 @@ scscale_prepare_matrix <- function(
   }
 
   if (input == "counts") {
-    mat <- scscale_normalize_counts(
-      mat,
-      target_depth = target_depth,
-      count_transform = count_transform,
-      center = center,
-      scale = scale
-    )
+    mat <- if (!isTRUE(scale) && count_transform %in% c("log1p_cpm", "log1p")) {
+      scscale_normalize_counts_sparse_covariance(
+        mat,
+        target_depth = target_depth,
+        count_transform = count_transform,
+        center = center
+      )
+    } else {
+      scscale_normalize_counts(
+        mat,
+        target_depth = target_depth,
+        count_transform = count_transform,
+        center = center,
+        scale = scale
+      )
+    }
     norm <- list(
       method = paste0(count_transform, "_row_center"),
       target_depth = target_depth,
@@ -196,6 +240,49 @@ scscale_prepare_matrix <- function(
     features = rownames(mat),
     normalization = norm
   )
+}
+
+scscale_normalize_counts_sparse_covariance <- function(
+  counts,
+  target_depth = 1e4,
+  count_transform = c("log1p_cpm", "log1p"),
+  center = TRUE
+) {
+  count_transform <- match.arg(count_transform)
+  if (inherits(counts, "sparseMatrix")) {
+    counts@x[counts@x < 0] <- 0
+    normalized <- switch(
+      count_transform,
+      log1p = {
+        out <- counts
+        out@x <- log1p(out@x)
+        out
+      },
+      log1p_cpm = {
+        library_size <- Matrix::colSums(counts)
+        library_size[!is.finite(library_size) | library_size <= 0] <- 1
+        out <- Matrix::t(Matrix::t(counts) / library_size) * target_depth
+        out@x <- log1p(out@x)
+        out
+      }
+    )
+  } else {
+    counts <- as_dense_matrix(counts)
+    counts[counts < 0] <- 0
+    normalized <- switch(
+      count_transform,
+      log1p = log1p(counts),
+      log1p_cpm = {
+        library_size <- colSums(counts)
+        library_size[!is.finite(library_size) | library_size <= 0] <- 1
+        log1p(sweep(counts, 2, library_size, "/") * target_depth)
+      }
+    )
+  }
+  if (isTRUE(center)) {
+    attr(normalized, "row_center") <- row_means(normalized)
+  }
+  normalized
 }
 
 scscale_normalize_counts <- function(
@@ -251,16 +338,21 @@ scscale_spectrum <- function(x, input = "normalized", n = NULL, p = NULL) {
     ))
   }
 
-  x <- as_dense_matrix(x)
   n <- ncol(x)
   p <- nrow(x)
   if (n < 1L || p < 1L) {
     stop("x must have at least one row and one column.", call. = FALSE)
   }
-  sv <- svd(t(x), nu = 0, nv = 0)$d
-  ev <- sort((sv^2) / n, decreasing = TRUE)
+  center <- attr(x, "row_center")
+  gram <- as.matrix(Matrix::tcrossprod(x) / n)
+  if (!is.null(center)) {
+    gram <- gram - tcrossprod(as.numeric(center))
+  }
+  gram <- (gram + t(gram)) / 2
+  eig <- eigen(gram, symmetric = TRUE)
+  ev <- eig$values
   ev <- ev[is.finite(ev) & ev > 0]
-  data.frame(
+  out <- data.frame(
     rank = seq_along(ev),
     lambda = ev,
     eigenvalue = ev,
@@ -270,6 +362,8 @@ scscale_spectrum <- function(x, input = "normalized", n = NULL, p = NULL) {
     c_X = p / n,
     source = input
   )
+  attr(out, "u") <- eig$vectors[, seq_along(ev), drop = FALSE]
+  out
 }
 
 scscale_mp_edges <- function(c_X, tau2 = 1) {
@@ -466,7 +560,7 @@ scscale_fit_mp_iterative <- function(
   mp_sample_p = 1200,
   mp_sample_reps = 3,
   mp_sample_seed = 1,
-  gap_z_threshold = 5,
+  gap_z_threshold = 6,
   quiet_z_threshold = 5,
   quiet_run = 20,
   background_skip = 25,
@@ -635,13 +729,18 @@ scscale_fit_mp_iterative <- function(
   )
 }
 
-scscale_spike_table <- function(eigenvalues, bulk, r = NULL) {
+scscale_spike_table <- function(eigenvalues, bulk, r = NULL, force_spikes = FALSE) {
   ev <- sort(eigenvalues[is.finite(eigenvalues) & eigenvalues > 0], decreasing = TRUE)
   lambda_tilde <- ev / bulk$tau2
   term <- lambda_tilde - (1 + bulk$c_X)
   disc <- term^2 - 4 * bulk$c_X
   d2 <- rep(0, length(ev))
-  ok <- seq_along(ev) %in% bulk$spike_index & is.finite(disc) & disc >= 0
+  spike_index <- if (isTRUE(force_spikes) && !is.null(r)) {
+    seq_len(min(as.integer(r), length(ev)))
+  } else {
+    bulk$spike_index
+  }
+  ok <- seq_along(ev) %in% spike_index & is.finite(disc) & disc >= 0
   d2[ok] <- pmax((term[ok] + sqrt(disc[ok])) / (2 * bulk$c_X), 0)
   q <- bulk$c_X * d2
 
@@ -650,7 +749,7 @@ scscale_spike_table <- function(eigenvalues, bulk, r = NULL) {
     lambda = ev,
     eigenvalue = ev,
     lambda_tilde = lambda_tilde,
-    is_spike = seq_along(ev) %in% bulk$spike_index,
+    is_spike = seq_along(ev) %in% spike_index,
     d2_X = d2,
     d2 = d2,
     d = sqrt(d2),
@@ -709,16 +808,32 @@ scscale_mi <- function(
     stop("fit and target_fit must be scscale_fit objects.", call. = FALSE)
   }
 
-  r_use <- r %||% min(length(fit$theta_X), length(target_fit$theta_X))
-  m <- min(r_use, nrow(fit$spikes), nrow(target_fit$spikes))
-  theta_Y <- target_fit$theta_X[seq_len(m)]
-  theta_Y_infinity <- target_fit$theta_infinity[seq_len(m)]
+  if (is.null(P)) {
+    r_use <- r %||% min(length(fit$theta_X), length(target_fit$theta_X))
+    r_X_use <- min(r_use, nrow(fit$spikes))
+    r_Y_use <- min(r_use, nrow(target_fit$spikes))
+  } else {
+    P <- as_dense_matrix(P)
+    r_X_use <- min(nrow(P), length(fit$theta_X), nrow(fit$spikes))
+    r_Y_use <- min(ncol(P), length(target_fit$theta_X), nrow(target_fit$spikes))
+    if (!is.null(r)) {
+      r_X_use <- min(r_X_use, as.integer(r))
+      r_Y_use <- min(r_Y_use, as.integer(r))
+    }
+  }
+  if (r_X_use < 1L || r_Y_use < 1L) {
+    stop("No shared spike/subspace dimensions are available for MI.", call. = FALSE)
+  }
+  theta_X <- fit$theta_X[seq_len(r_X_use)]
+  theta_Y <- target_fit$theta_X[seq_len(r_Y_use)]
+  theta_X_infinity <- fit$theta_infinity[seq_len(r_X_use)]
+  theta_Y_infinity <- target_fit$theta_infinity[seq_len(r_Y_use)]
 
-  base_details <- scscale_low_rank_mi(fit$theta_X[seq_len(m)], theta_Y, P = P, eps = eps)
+  base_details <- scscale_low_rank_mi(theta_X, theta_Y, P = P, eps = eps)
   base <- base_details$mi
   theta_double <- base_details$gamma
   infinite_details <- scscale_low_rank_mi(
-    fit$theta_infinity[seq_len(m)],
+    theta_X_infinity,
     theta_Y_infinity,
     P = P,
     eps = eps
@@ -731,16 +846,18 @@ scscale_mi <- function(
     I_theory = base,
     mi = base,
     I_infinity = infinite,
-    theta_X = fit$theta_X[seq_len(m)],
+    theta_X = theta_X,
     theta_Y = theta_Y,
-    theta_X_infinity = fit$theta_infinity[seq_len(m)],
+    theta_X_infinity = theta_X_infinity,
     theta_Y_infinity = theta_Y_infinity,
-    r = m,
+    r = min(r_X_use, r_Y_use),
+    r_X = r_X_use,
+    r_Y = r_Y_use,
     intermediate = list(
-      q_X = fit$spikes$q_X[seq_len(m)],
-      q_Y = target_fit$spikes$q_X[seq_len(m)],
-      d2_X = fit$spikes$d2_X[seq_len(m)],
-      d2_Y = target_fit$spikes$d2_X[seq_len(m)],
+      q_X = fit$spikes$q_X[seq_len(r_X_use)],
+      q_Y = target_fit$spikes$q_X[seq_len(r_Y_use)],
+      d2_X = fit$spikes$d2_X[seq_len(r_X_use)],
+      d2_Y = target_fit$spikes$d2_X[seq_len(r_Y_use)],
       theta_double = theta_double,
       theta_double_infinity = theta_double_infinity,
       sigma = base_details$sigma,
@@ -758,8 +875,12 @@ scscale_mi <- function(
   if (isTRUE(empirical)) {
     has_matrices <- !is.null(fit$matrix) && !is.null(target_fit$matrix)
     if (has_matrices) {
-      z_X <- right_singular_vectors(fit$matrix, r = m, use_irlba = use_irlba)
-      z_Y <- right_singular_vectors(target_fit$matrix, r = m, use_irlba = use_irlba)
+      z_X <- right_singular_vectors(fit$matrix, r = r_X_use, use_irlba = use_irlba)
+      z_Y <- if (inherits(target_fit, "scscale_subspace_fit") && !is.null(target_fit$z)) {
+        target_fit$z[, seq_len(min(r_Y_use, ncol(target_fit$z))), drop = FALSE]
+      } else {
+        right_singular_vectors(target_fit$matrix, r = r_Y_use, use_irlba = use_irlba)
+      }
       empirical_overlap <- subspace_overlap_mi(z_X, z_Y, eps = eps)
       out$I_empirical <- empirical_overlap$mi
       out$empirical <- list(
@@ -790,7 +911,7 @@ scscale_mi <- function(
     out$cell_scaling <- stats::aggregate(
       I_theory ~ n + c_X,
       data = scscale_cell_scaling(
-        fit$spikes$q_X[seq_len(m)],
+        fit$spikes$q_X[seq_len(r_X_use)],
         p = fit$p,
         n_grid = n_grid,
         theta_Y = theta_Y,
@@ -820,7 +941,7 @@ scscale_mi <- function(
         rate_rows <- umi_rows[umi_rows$sampling_rate == rate, , drop = FALSE]
         q_df <- unique(rate_rows[, c("rank", "q_X")])
         q_df <- q_df[order(q_df$rank), , drop = FALSE]
-        q_X <- q_df$q_X[seq_len(min(m, nrow(q_df)))]
+        q_X <- q_df$q_X[seq_len(min(r_X_use, nrow(q_df)))]
         curve <- stats::aggregate(
           I_theory ~ n + c_X,
           data = scscale_cell_scaling(q_X, p = fit$p, n_grid = n_grid, theta_Y = theta_Y, P = P, eps = eps),

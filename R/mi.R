@@ -59,7 +59,11 @@ right_singular_vectors <- function(
   maxit = 2000,
   work = NULL
 ) {
+  center <- attr(x, "row_center")
   x <- as_dense_matrix(x)
+  if (!is.null(center)) {
+    x <- x - as.numeric(center)
+  }
   r_need <- as.integer(r) + as.integer(drop_first)
   r_eff <- min(r_need, nrow(x) - 1L, ncol(x) - 1L)
   if (!is.finite(r_eff) || r_eff < 1L) return(NULL)

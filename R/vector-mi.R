@@ -23,7 +23,9 @@ align_vector_to_cells <- function(target, cells, target_name = "target") {
 }
 
 numeric_target_matrix <- function(values, center = TRUE, scale = TRUE) {
+  value_names <- names(values)
   values <- as.numeric(values)
+  names(values) <- value_names
   if (anyNA(values)) stop("numeric target contains NA values.", call. = FALSE)
   y <- matrix(values, nrow = 1L)
   rownames(y) <- "numeric_target"

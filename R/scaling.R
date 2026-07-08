@@ -342,6 +342,168 @@ scscale_umi_scaling <- function(
   out
 }
 
+scscale_linear_umi_factor <- function(
+  sampling_rate = NULL,
+  U = NULL,
+  reference_U = NULL,
+  intercept,
+  slope,
+  clamp_rate = TRUE,
+  eps = 1e-12
+) {
+  if (is.null(sampling_rate)) {
+    if (is.null(U) || is.null(reference_U)) {
+      stop("Provide sampling_rate, or both U and reference_U.", call. = FALSE)
+    }
+    if (!is.finite(reference_U) || reference_U <= 0) {
+      stop("reference_U must be positive.", call. = FALSE)
+    }
+    sampling_rate <- U / reference_U
+  }
+  sampling_rate <- as.numeric(sampling_rate)
+  if (any(!is.finite(sampling_rate) | sampling_rate < 0)) {
+    stop("sampling rates implied by the UMI parameter must be finite and non-negative.", call. = FALSE)
+  }
+  if (isTRUE(clamp_rate)) sampling_rate <- pmin(sampling_rate, 1)
+  intercept <- as.numeric(intercept)
+  slope <- as.numeric(slope)
+  if (length(intercept) != 1L || length(slope) != 1L ||
+    !is.finite(intercept) || !is.finite(slope)) {
+    stop("intercept and slope must be finite scalars.", call. = FALSE)
+  }
+  denominator <- intercept + slope
+  if (!is.finite(denominator) || abs(denominator) <= eps) {
+    stop("intercept + slope must be non-zero at full depth.", call. = FALSE)
+  }
+  factor <- (intercept + slope * sampling_rate) / denominator
+  factor[!is.finite(factor)] <- NA_real_
+  factor <- pmax(factor, 0)
+  factor
+}
+
+scscale_linear_umi_scaling <- function(
+  fit,
+  U_grid = NULL,
+  sampling_rates = NULL,
+  reference_U = NULL,
+  intercept,
+  slope,
+  r = fit$r %||% sum(fit$spikes$is_spike),
+  theta_Y = NULL,
+  P = NULL,
+  clamp_rate = TRUE
+) {
+  if (!inherits(fit, "scscale_fit")) {
+    stop("fit must be a scscale_fit object.", call. = FALSE)
+  }
+  if (is.null(U_grid) && is.null(sampling_rates)) {
+    stop("Provide U_grid or sampling_rates.", call. = FALSE)
+  }
+  if (!is.null(sampling_rates) && any(!is.finite(sampling_rates) | sampling_rates < 0)) {
+    stop("sampling_rates must be finite and non-negative.", call. = FALSE)
+  }
+  if (is.null(sampling_rates)) {
+    factor <- scscale_linear_umi_factor(
+      U = U_grid,
+      reference_U = reference_U,
+      intercept = intercept,
+      slope = slope,
+      clamp_rate = clamp_rate
+    )
+    sampling_rates <- if (is.null(reference_U)) rep(NA_real_, length(U_grid)) else U_grid / reference_U
+  } else {
+    factor <- scscale_linear_umi_factor(
+      sampling_rate = sampling_rates,
+      intercept = intercept,
+      slope = slope,
+      clamp_rate = clamp_rate
+    )
+    if (is.null(U_grid)) {
+      U_grid <- if (is.null(reference_U)) sampling_rates else sampling_rates * reference_U
+    }
+  }
+
+  r_eff <- min(as.integer(r), nrow(fit$spikes))
+  if (!is.finite(r_eff) || r_eff < 1L) stop("No spike strengths available to scale.", call. = FALSE)
+  q_full <- fit$spikes$q_X[seq_len(r_eff)]
+  p <- fit$p
+  n <- fit$n
+  theta_Y <- theta_Y %||% fit$theta_infinity[seq_len(min(r_eff, length(fit$theta_infinity)))]
+
+  rows <- vector("list", length(factor))
+  q_by_rate <- vector("list", length(factor))
+  names(q_by_rate) <- as.character(sampling_rates)
+  for (i in seq_along(factor)) {
+    q_X <- q_full * factor[[i]]
+    theta_X <- scscale_recoverability(q_X, c_X = p / n)
+    theta_X_infinity <- scscale_theta_infinity(q_X)
+    rows[[i]] <- data.frame(
+      U = U_grid[[i]],
+      replicate = 1L,
+      rank = seq_len(r_eff),
+      q_X = q_X,
+      theta_X = theta_X,
+      theta_X_infinity = theta_X_infinity,
+      I_theory = scscale_low_rank_mi(theta_X, theta_Y, P = P)$mi,
+      I_infinity = scscale_low_rank_mi(theta_X_infinity, theta_Y, P = P)$mi,
+      I_empirical = NA_real_,
+      gamma_empirical = NA_real_,
+      c_X = p / n,
+      n = n,
+      p = p,
+      sampling_rate = sampling_rates[[i]],
+      linear_umi_factor = factor[[i]],
+      total_umi_expected = U_grid[[i]],
+      total_umi_observed = NA_real_
+    )
+    q_by_rate[[i]] <- q_X
+  }
+  scaling <- do.call(rbind, rows)
+  q_total <- stats::aggregate(
+    scaling["q_X"],
+    by = scaling[c("U", "sampling_rate", "replicate", "linear_umi_factor")],
+    FUN = sum
+  )
+  names(q_total)[names(q_total) == "q_X"] <- "q_total"
+  q_total$q_total_rate_hat <- q_total$q_total
+
+  out <- list(
+    scaling = scaling,
+    q_fit = NULL,
+    q_fit_rate = data.frame(
+      rank = seq_len(r_eff),
+      q_rate_intercept = NA_real_,
+      q_rate_slope = NA_real_,
+      q_rate_r2 = NA_real_
+    ),
+    q_total = q_total,
+    q_total_fit = NULL,
+    q_total_rate_fit = data.frame(
+      q_total_rate_intercept = intercept,
+      q_total_rate_slope = slope,
+      q_total_rate_r2 = NA_real_
+    ),
+    reference_fit = fit,
+    theta_Y = theta_Y,
+    P = P,
+    U_grid = U_grid,
+    sampling_rates = sampling_rates,
+    q_by_rate = q_by_rate,
+    r = r_eff,
+    n_replicates = 1L,
+    empirical = FALSE,
+    linear_umi_parameter = list(
+      intercept = intercept,
+      slope = slope,
+      reference_U = reference_U,
+      clamp_rate = isTRUE(clamp_rate),
+      formula = "q_X(U) = q_X(full) * (intercept + slope * rho) / (intercept + slope)"
+    )
+  )
+  class(out) <- "scscale_umi_scaling"
+  out
+}
+
 scscale_cell_scaling <- function(
   d2_X,
   p,

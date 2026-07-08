@@ -3,8 +3,9 @@
 \title{Fit UMI-Depth MI Scaling}
 \usage{
 scscale_umi_mi(pair, x_counts, sampling_rates = c(0.10, 0.20, 0.35,
-  0.50, 0.70, 0.85, 1.00), count_transform = pair$count_transform,
-  seed = 1, mp_max_iter = 300, mp_grid_n = 2000, use_irlba = TRUE)
+  0.50, 0.70, 0.85, 1.00),
+  count_transform = pair$count_transform \%||\% "log1p_cpm", seed = 1,
+  mp_max_iter = 300, mp_grid_n = 2000, use_irlba = TRUE)
 }
 \arguments{
 \item{pair}{A \code{\link{scscale_pair_fit}} object.}
