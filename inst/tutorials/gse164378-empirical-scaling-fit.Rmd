@@ -36,7 +36,7 @@ fit <- scscale_empirical_scaling_fit(
   n_grid = n_grid,
   sampling_rates = sampling_rates,
   r = r_empirical,
-  n_replicates = 3,
+  n_replicates = 10,
   n_ref = max(n_grid),
   U_ref = max(sampling_rates) * stats::median(Matrix::colSums(rna_counts)),
   joint_mode = "hybrid",
@@ -73,6 +73,37 @@ rho_cols <- setNames(
   c("#0072B2", "#56B4E9", "#D55E00", "#E69F00", "#009E73", "#CC79A7", "#999999", "#8B5A2B", "#000000"),
   as.character(rho_to_U$sampling_rate)
 )
+
+summarize_mi <- function(data, by) {
+  mean_df <- aggregate(
+    stats::as.formula(paste("I_empirical ~", paste(by, collapse = " + "))),
+    data = data,
+    FUN = mean
+  )
+  sd_df <- aggregate(
+    stats::as.formula(paste("I_empirical ~", paste(by, collapse = " + "))),
+    data = data,
+    FUN = stats::sd
+  )
+  n_df <- aggregate(
+    stats::as.formula(paste("replicate ~", paste(by, collapse = " + "))),
+    data = data,
+    FUN = function(x) length(unique(x))
+  )
+  mean_df$I_sd <- sd_df$I_empirical
+  mean_df$n_replicates <- n_df$replicate
+  mean_df
+}
+
+draw_vertical_bars <- function(x, y, sd, col, cap = NULL, lwd = 1.6) {
+  sd[!is.finite(sd)] <- 0
+  if (is.null(cap)) {
+    cap <- diff(range(x)) * 0.012
+  }
+  segments(x, y - sd, x, y + sd, col = col, lwd = lwd)
+  segments(x - cap, y - sd, x + cap, y - sd, col = col, lwd = lwd)
+  segments(x - cap, y + sd, x + cap, y + sd, col = col, lwd = lwd)
+}
 ```
 
 ## Cell-Number Scaling
@@ -81,6 +112,7 @@ The cell-number marginal fit uses the full-depth grid slice.
 
 ```{r cell-number-scaling, fig.width=6.8, fig.height=4.6}
 cell_obs <- subset(grid, abs(U - fit$reference$U_ref) < 1e-8)
+cell_obs <- summarize_mi(cell_obs, by = "n")
 cell_obs <- cell_obs[order(cell_obs$n), ]
 
 n_curve <- seq(min(n_grid), max(n_grid), length.out = 200)
@@ -88,21 +120,21 @@ cell_curve <- data.frame(n = n_curve)
 cell_curve$I_fit <- predict(fit$cell_fit, cell_curve)
 
 plot(
-  cell_obs$n,
-  cell_obs$I_empirical,
-  pch = 16,
-  col = "#0072B2",
+  NA,
+  xlim = range(cell_obs$n),
+  ylim = range(c(cell_obs$I_empirical - cell_obs$I_sd, cell_obs$I_empirical + cell_obs$I_sd, cell_curve$I_fit), na.rm = TRUE),
   xlab = "Cell number n",
   ylab = expression(hat(I)(n~"|"~U[ref])),
   main = "Empirical cell-number scaling"
 )
+draw_vertical_bars(cell_obs$n, cell_obs$I_empirical, cell_obs$I_sd, col = "#0072B2")
 lines(cell_curve$n, cell_curve$I_fit, col = "#D55E00", lwd = 2)
 legend(
   "bottomright",
-  legend = c("empirical MI", "empirical fit"),
+  legend = c("empirical mean +/- sd", "empirical fit"),
   col = c("#0072B2", "#D55E00"),
-  pch = c(16, NA),
-  lwd = c(NA, 2),
+  pch = c(NA, NA),
+  lwd = c(1.6, 2),
   bty = "n"
 )
 ```
@@ -113,6 +145,7 @@ The UMI marginal fit uses the full-cell grid slice.
 
 ```{r umi-scaling, fig.width=6.8, fig.height=4.6}
 umi_obs <- subset(grid, n == fit$reference$n_ref)
+umi_obs <- summarize_mi(umi_obs, by = c("sampling_rate", "U"))
 umi_obs <- umi_obs[order(umi_obs$sampling_rate), ]
 
 rho_curve <- seq(min(sampling_rates), max(sampling_rates), length.out = 200)
@@ -121,21 +154,21 @@ umi_curve <- data.frame(U = U_curve, sampling_rate = rho_curve)
 umi_curve$I_fit <- predict(fit$umi_fit, umi_curve)
 
 plot(
-  umi_obs$sampling_rate,
-  umi_obs$I_empirical,
-  pch = 16,
-  col = "#0072B2",
+  NA,
+  xlim = range(umi_obs$sampling_rate),
+  ylim = range(c(umi_obs$I_empirical - umi_obs$I_sd, umi_obs$I_empirical + umi_obs$I_sd, umi_curve$I_fit), na.rm = TRUE),
   xlab = expression("Sampling rate " * rho),
   ylab = expression(hat(I)(U~"|"~n[ref])),
   main = "Empirical UMI scaling"
 )
+draw_vertical_bars(umi_obs$sampling_rate, umi_obs$I_empirical, umi_obs$I_sd, col = "#0072B2")
 lines(umi_curve$sampling_rate, umi_curve$I_fit, col = "#D55E00", lwd = 2)
 legend(
   "bottomright",
-  legend = c("empirical MI", "empirical fit"),
+  legend = c("empirical mean +/- sd", "empirical fit"),
   col = c("#0072B2", "#D55E00"),
-  pch = c(16, NA),
-  lwd = c(NA, 2),
+  pch = c(NA, NA),
+  lwd = c(1.6, 2),
   bty = "n"
 )
 ```
@@ -146,10 +179,11 @@ The joint fit uses all grid points and one global parameter set. Each line below
 is the fitted cell-number scaling curve at one UMI sampling rate.
 
 ```{r joint-scaling-by-umi, fig.width=8, fig.height=5.2}
+joint_obs <- summarize_mi(grid, by = c("n", "sampling_rate", "U"))
 plot(
   NA,
   xlim = range(n_grid),
-  ylim = range(c(grid$I_empirical, fit$fitted), na.rm = TRUE),
+  ylim = range(c(joint_obs$I_empirical - joint_obs$I_sd, joint_obs$I_empirical + joint_obs$I_sd, fit$fitted), na.rm = TRUE),
   xlab = "Cell number n",
   ylab = expression(hat(I)(n,U)),
   main = "Empirical joint scaling by UMI level"
@@ -157,9 +191,9 @@ plot(
 
 for (rho in joint_plot_rates) {
   U_i <- rho_to_U$U[rho_to_U$sampling_rate == rho]
-  obs_i <- grid[grid$sampling_rate == rho, ]
+  obs_i <- joint_obs[joint_obs$sampling_rate == rho, ]
   obs_i <- obs_i[order(obs_i$n), ]
-  points(obs_i$n, obs_i$I_empirical, pch = 16, col = rho_cols[as.character(rho)])
+  draw_vertical_bars(obs_i$n, obs_i$I_empirical, obs_i$I_sd, col = rho_cols[as.character(rho)])
   pred_i <- data.frame(n = seq(min(n_grid), max(n_grid), length.out = 200), U = U_i)
   pred_i$I_fit <- predict(fit, pred_i)
   lines(pred_i$n, pred_i$I_fit, col = rho_cols[as.character(rho)], lwd = 2)
@@ -169,7 +203,7 @@ legend(
   "bottomright",
   legend = paste0("rho = ", joint_plot_rates),
   col = rho_cols[as.character(joint_plot_rates)],
-  pch = 16,
+  pch = NA,
   lwd = 2,
   bty = "n",
   cex = 0.85
@@ -187,7 +221,12 @@ number.
 grid_out <- grid
 grid_out$I_fit <- fit$fitted
 grid_out$residual <- fit$residuals
-grid_out[, c("n", "sampling_rate", "U", "I_empirical", "I_fit", "residual", "r_eff")]
+grid_summary <- summarize_mi(grid_out, by = c("n", "sampling_rate", "U"))
+fit_summary <- aggregate(I_fit ~ n + sampling_rate + U, data = grid_out, FUN = mean)
+resid_summary <- aggregate(residual ~ n + sampling_rate + U, data = grid_out, FUN = mean)
+grid_summary$I_fit <- fit_summary$I_fit
+grid_summary$residual <- resid_summary$residual
+grid_summary[, c("n", "sampling_rate", "U", "I_empirical", "I_sd", "I_fit", "residual", "n_replicates")]
 ```
 
 ```{r marginal-joint-check, fig.width=11, fig.height=4.5}
@@ -199,44 +238,44 @@ umi_joint_curve$I_fit <- predict(fit, umi_joint_curve)
 
 old_par <- par(mfrow = c(1, 2), mar = c(4.2, 4.3, 2.8, 1))
 plot(
-  cell_obs$n,
-  cell_obs$I_empirical,
-  pch = 16,
-  col = "#0072B2",
+  NA,
+  xlim = range(cell_obs$n),
+  ylim = range(c(cell_obs$I_empirical - cell_obs$I_sd, cell_obs$I_empirical + cell_obs$I_sd, cell_curve$I_fit, cell_joint_curve$I_fit), na.rm = TRUE),
   xlab = "Cell number n",
   ylab = expression(hat(I)(n~"|"~U[ref])),
   main = "Cell marginal vs joint slice"
 )
+draw_vertical_bars(cell_obs$n, cell_obs$I_empirical, cell_obs$I_sd, col = "#0072B2")
 lines(cell_curve$n, cell_curve$I_fit, col = "#D55E00", lwd = 2)
 lines(cell_joint_curve$n, cell_joint_curve$I_fit, col = "#009E73", lwd = 2, lty = 2)
 legend(
   "bottomright",
-  legend = c("empirical MI", "marginal fit", "joint slice"),
+  legend = c("empirical mean +/- sd", "marginal fit", "joint slice"),
   col = c("#0072B2", "#D55E00", "#009E73"),
-  pch = c(16, NA, NA),
-  lwd = c(NA, 2, 2),
+  pch = c(NA, NA, NA),
+  lwd = c(1.6, 2, 2),
   lty = c(NA, 1, 2),
   bty = "n",
   cex = 0.9
 )
 
 plot(
-  umi_obs$sampling_rate,
-  umi_obs$I_empirical,
-  pch = 16,
-  col = "#0072B2",
+  NA,
+  xlim = range(umi_obs$sampling_rate),
+  ylim = range(c(umi_obs$I_empirical - umi_obs$I_sd, umi_obs$I_empirical + umi_obs$I_sd, umi_curve$I_fit, umi_joint_curve$I_fit), na.rm = TRUE),
   xlab = expression("Sampling rate " * rho),
   ylab = expression(hat(I)(U~"|"~n[ref])),
   main = "UMI marginal vs joint slice"
 )
+draw_vertical_bars(umi_obs$sampling_rate, umi_obs$I_empirical, umi_obs$I_sd, col = "#0072B2")
 lines(umi_curve$sampling_rate, umi_curve$I_fit, col = "#D55E00", lwd = 2)
 lines(umi_joint_curve$sampling_rate, umi_joint_curve$I_fit, col = "#009E73", lwd = 2, lty = 2)
 legend(
   "bottomright",
-  legend = c("empirical MI", "marginal fit", "joint slice"),
+  legend = c("empirical mean +/- sd", "marginal fit", "joint slice"),
   col = c("#0072B2", "#D55E00", "#009E73"),
-  pch = c(16, NA, NA),
-  lwd = c(NA, 2, 2),
+  pch = c(NA, NA, NA),
+  lwd = c(1.6, 2, 2),
   lty = c(NA, 1, 2),
   bty = "n",
   cex = 0.9
