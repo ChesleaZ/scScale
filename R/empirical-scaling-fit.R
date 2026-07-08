@@ -301,9 +301,10 @@ scscale_empirical_scaling_fit <- function(
   target,
   n_grid,
   U_grid = NULL,
-  sampling_rates = NULL,
+  sampling_rates = c(0.10, 0.15, 0.20, 0.30, 0.40, 0.50, 0.70, 0.85, 1.00),
   r = 10,
-  n_replicates = 1,
+  n_replicates = 10,
+  n_workers = 1,
   n_ref = NULL,
   U_ref = NULL,
   joint_mode = c("hybrid", "transfer", "free"),
@@ -327,6 +328,9 @@ scscale_empirical_scaling_fit <- function(
   input <- match.arg(input)
   target_input <- match.arg(target_input, choices = c("counts", "normalized"))
   count_transform <- match.arg(count_transform)
+  if (!is.null(U_grid) && missing(sampling_rates)) {
+    sampling_rates <- NULL
+  }
 
   grid <- scscale_empirical_inu_grid(
     x = x,
@@ -336,6 +340,7 @@ scscale_empirical_scaling_fit <- function(
     sampling_rates = sampling_rates,
     r = r,
     n_replicates = n_replicates,
+    n_workers = n_workers,
     seed = seed,
     input = input,
     target_input = target_input,
@@ -400,6 +405,7 @@ scscale_empirical_scaling_fit <- function(
     reference = list(n_ref = n_ref, U_ref = U_ref),
     r = r,
     n_replicates = n_replicates,
+    n_workers = n_workers,
     joint_mode = joint_mode,
     fitted = fitted,
     residuals = grid$I_empirical - fitted,
@@ -422,9 +428,10 @@ scscale_empirical_inu_grid <- function(
   target,
   n_grid,
   U_grid = NULL,
-  sampling_rates = NULL,
+  sampling_rates = c(0.10, 0.15, 0.20, 0.30, 0.40, 0.50, 0.70, 0.85, 1.00),
   r = 10,
-  n_replicates = 1,
+  n_replicates = 10,
+  n_workers = 1,
   seed = 1,
   input = c("counts", "normalized"),
   target_input = input,
@@ -438,6 +445,9 @@ scscale_empirical_inu_grid <- function(
   input <- match.arg(input)
   target_input <- match.arg(target_input, choices = c("counts", "normalized"))
   count_transform <- match.arg(count_transform)
+  if (!is.null(U_grid) && missing(sampling_rates)) {
+    sampling_rates <- NULL
+  }
   if (is.null(U_grid) && is.null(sampling_rates)) stop("Provide U_grid or sampling_rates.", call. = FALSE)
   if (!is.null(U_grid) && !is.null(sampling_rates)) stop("Provide only one of U_grid or sampling_rates.", call. = FALSE)
 
@@ -448,6 +458,8 @@ scscale_empirical_inu_grid <- function(
   if (!length(n_grid)) stop("n_grid must contain positive cell counts.", call. = FALSE)
   n_replicates <- as.integer(n_replicates)
   if (!is.finite(n_replicates) || n_replicates < 1L) stop("n_replicates must be positive.", call. = FALSE)
+  n_workers <- as.integer(n_workers)
+  if (!is.finite(n_workers) || n_workers < 1L) stop("n_workers must be positive.", call. = FALSE)
 
   target_is_matrix <- is.matrix(target) || inherits(target, "Matrix")
   if (target_is_matrix) {
@@ -474,59 +486,76 @@ scscale_empirical_inu_grid <- function(
   }
 
   total_umi <- colSums(x)
-  rows <- list()
-  row_i <- 0L
+  eligible_by_u <- vector("list", length(U_grid))
+  tasks <- list()
+  task_i <- 0L
   for (u_i in seq_along(U_grid)) {
     U <- U_grid[[u_i]]
     rate <- sampling_rates[[u_i]]
     eligible <- if (input == "counts" && is.na(rate)) colnames(x)[total_umi >= U] else colnames(x)
+    eligible_by_u[[u_i]] <- eligible
     for (n_target in n_grid) {
       if (length(eligible) < n_target) next
       for (replicate in seq_len(n_replicates)) {
-        view_seed <- seed + u_i * 1000003L + n_target * 9176L + replicate
-        set.seed(view_seed)
-        cells <- sample(eligible, n_target)
-        x_view <- x[, cells, drop = FALSE]
-        if (input == "counts") {
-          x_view <- if (is.na(rate)) {
-            scscale_downsample_counts(x_view, U = U, seed = view_seed + 13L)
-          } else {
-            scscale_downsample_counts_fraction(x_view, fraction = rate, seed = view_seed + 13L)
-          }
-          keep <- colSums(x_view) > 0
-          x_view <- x_view[, keep, drop = FALSE]
-          cells <- colnames(x_view)
-        }
-        target_view <- if (target_is_matrix) target[, cells, drop = FALSE] else target[cells]
-        mi <- scscale_empirical_mi(
-          x_view,
-          target_view,
-          r = r,
-          input = input,
-          target_input = target_input,
-          target_depth = target_depth,
-          count_transform = count_transform,
-          center = center,
-          scale = scale,
-          eps = eps,
-          use_irlba = use_irlba,
-          store_subspaces = FALSE
-        )
-        row_i <- row_i + 1L
-        rows[[row_i]] <- data.frame(
-          n = ncol(x_view),
-          U = U,
-          sampling_rate = rate,
-          replicate = replicate,
-          I_empirical = mi$mi,
-          r = r,
-          r_eff = mi$r_eff %||% NA_integer_,
-          actual_median_umi_per_cell = if (input == "counts") stats::median(colSums(x_view)) else NA_real_,
-          actual_mean_umi_per_cell = if (input == "counts") mean(colSums(x_view)) else NA_real_,
-          stringsAsFactors = FALSE
-        )
+        task_i <- task_i + 1L
+        tasks[[task_i]] <- list(u_i = u_i, U = U, rate = rate, n_target = n_target, replicate = replicate)
       }
     }
+  }
+  if (!length(tasks)) stop("No grid rows were produced; check n_grid and U_grid eligibility.", call. = FALSE)
+
+  compute_row <- function(task) {
+    view_seed <- seed + task$u_i * 1000003L + task$n_target * 9176L + task$replicate
+    set.seed(view_seed)
+    cells <- sample(eligible_by_u[[task$u_i]], task$n_target)
+    x_view <- x[, cells, drop = FALSE]
+    if (input == "counts") {
+      x_view <- if (is.na(task$rate)) {
+        scscale_downsample_counts(x_view, U = task$U, seed = view_seed + 13L)
+      } else {
+        scscale_downsample_counts_fraction(x_view, fraction = task$rate, seed = view_seed + 13L)
+      }
+      keep <- colSums(x_view) > 0
+      x_view <- x_view[, keep, drop = FALSE]
+      cells <- colnames(x_view)
+    }
+    target_view <- if (target_is_matrix) target[, cells, drop = FALSE] else target[cells]
+    mi <- scscale_empirical_mi(
+      x_view,
+      target_view,
+      r = r,
+      input = input,
+      target_input = target_input,
+      target_depth = target_depth,
+      count_transform = count_transform,
+      center = center,
+      scale = scale,
+      eps = eps,
+      use_irlba = use_irlba,
+      store_subspaces = FALSE
+    )
+    data.frame(
+      n = ncol(x_view),
+      U = task$U,
+      sampling_rate = task$rate,
+      replicate = task$replicate,
+      I_empirical = mi$mi,
+      r = r,
+      r_eff = if (is.null(mi$r_eff)) NA_integer_ else mi$r_eff,
+      actual_median_umi_per_cell = if (input == "counts") stats::median(colSums(x_view)) else NA_real_,
+      actual_mean_umi_per_cell = if (input == "counts") mean(colSums(x_view)) else NA_real_,
+      stringsAsFactors = FALSE
+    )
+  }
+
+  rows <- if (n_workers == 1L || length(tasks) == 1L) {
+    lapply(tasks, compute_row)
+  } else if (.Platform$OS.type == "unix") {
+    parallel::mclapply(tasks, compute_row, mc.cores = min(n_workers, length(tasks)), mc.preschedule = FALSE)
+  } else {
+    cl <- parallel::makeCluster(min(n_workers, length(tasks)))
+    on.exit(parallel::stopCluster(cl), add = TRUE)
+    parallel::parLapply(cl, tasks, compute_row)
   }
   out <- do.call(rbind, rows)
   if (is.null(out)) stop("No grid rows were produced; check n_grid and U_grid eligibility.", call. = FALSE)
@@ -571,7 +600,7 @@ predict.scscale_empirical_inu_fit <- function(object, newdata = NULL, ...) {
 print.scscale_empirical_inu_fit <- function(x, ...) {
   cat("scScale direct empirical I(n,U) fit\n")
   cat("  grid rows: ", nrow(x$grid), "\n", sep = "")
-  cat("  rank: ", x$r, "  replicates: ", x$n_replicates, "\n", sep = "")
+  cat("  rank: ", x$r, "  replicates: ", x$n_replicates, "  workers: ", x$n_workers, "\n", sep = "")
   cat("  reference: n_ref=", x$reference$n_ref, ", U_ref=", signif(x$reference$U_ref, 5), "\n", sep = "")
   cat("  joint mode: ", x$joint_mode, "\n", sep = "")
   coef <- c(x$joint_fit$coefficients, x$joint_fit$fixed)

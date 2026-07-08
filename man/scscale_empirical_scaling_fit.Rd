@@ -10,12 +10,13 @@
 \title{Fit Direct Empirical Scaling Laws}
 \usage{
 scscale_empirical_scaling_fit(x, target, n_grid, U_grid = NULL,
-  sampling_rates = NULL, r = 10, n_replicates = 1, n_ref = NULL,
-  U_ref = NULL, joint_mode = c("hybrid", "transfer", "free"), seed = 1,
-  input = c("counts", "normalized"), target_input = input,
-  target_depth = 1e4, count_transform = c("log1p_cpm", "pearson_residual",
-  "log1p"), center = TRUE, scale = FALSE, eps = 1e-12,
-  use_irlba = TRUE, cell_start = NULL, umi_start = NULL,
+  sampling_rates = c(0.10, 0.15, 0.20, 0.30, 0.40, 0.50, 0.70, 0.85,
+  1.00), r = 10, n_replicates = 10, n_workers = 1, n_ref = NULL,
+  U_ref = NULL, joint_mode = c("hybrid", "transfer", "free"),
+  seed = 1, input = c("counts", "normalized"), target_input = input,
+  target_depth = 1e4, count_transform = c("log1p_cpm",
+  "pearson_residual", "log1p"), center = TRUE, scale = FALSE,
+  eps = 1e-12, use_irlba = TRUE, cell_start = NULL, umi_start = NULL,
   joint_start = NULL, cell_control = list(maxit = 10000),
   umi_control = list(maxit = 10000),
   joint_control = list(maxit = 20000))
@@ -44,10 +45,14 @@ scscale_empirical_joint_curve(n, U, I_infinity, C_n, A_n, C_U, A_U,
 \item{x}{Feature-by-cell source matrix.}
 \item{target}{Feature-by-cell target matrix or cell-level target vector.}
 \item{n_grid}{Cell numbers to sample.}
-\item{U_grid}{Target UMI depths per cell. Provide either \code{U_grid} or \code{sampling_rates}.}
+\item{U_grid}{Target UMI depths per cell. Provide either \code{U_grid} or
+\code{sampling_rates}. If \code{U_grid} is supplied and \code{sampling_rates}
+is omitted, the default sampling-rate grid is ignored.}
 \item{sampling_rates}{Count downsampling fractions in \code{(0,1]}.}
 \item{r}{Fixed rank used for empirical subspace MI.}
 \item{n_replicates}{Number of replicate subsamples per grid point.}
+\item{n_workers}{Number of parallel workers for empirical grid evaluation.
+The default \code{1} evaluates sequentially.}
 \item{n_ref, U_ref}{Reference cell number and UMI depth for marginal fits.
 When omitted, the largest sampled value is used. If a supplied reference is not
 on the grid, the nearest sampled grid value is used.}

@@ -17,10 +17,11 @@ rna_counts <- gse164378_3p_citeseq_hvg$rna_counts
 adt_counts <- gse164378_3p_citeseq_hvg$adt_counts
 count_transform <- "log1p_cpm"
 
-sampling_rates <- c(0.10, 0.15, 0.20, 0.30, 0.40, 0.50, 0.70, 0.85, 1.00)
 joint_plot_rates <- c(0.20, 0.50, 1.00)
 n_grid <- c(500, 750, 1000, 1500, 2000, 3000, 4000)
 r_empirical <- 12
+available_cores <- parallel::detectCores(logical = TRUE)
+n_workers <- if (is.na(available_cores)) 2L else max(1L, min(4L, available_cores))
 ```
 
 ## Fit Empirical Scaling Law
@@ -34,14 +35,12 @@ fit <- scscale_empirical_scaling_fit(
   rna_counts,
   adt_counts,
   n_grid = n_grid,
-  sampling_rates = sampling_rates,
   r = r_empirical,
-  n_replicates = 10,
   n_ref = max(n_grid),
-  U_ref = max(sampling_rates) * stats::median(Matrix::colSums(rna_counts)),
   joint_mode = "hybrid",
   seed = 164378,
-  count_transform = count_transform
+  count_transform = count_transform,
+  n_workers = n_workers
 )
 
 fit
@@ -49,18 +48,9 @@ fit
 
 The fitted joint law uses one global parameter set across the sampled grid.
 
-```{r fitted-parameters}
-data.frame(
-  parameter = names(c(fit$joint_fit$coefficients, fit$joint_fit$fixed)),
-  value = as.numeric(c(fit$joint_fit$coefficients, fit$joint_fit$fixed)),
-  row.names = NULL
-)
-
-fit$ceiling
-```
-
 ```{r prepare-plot-data}
 grid <- fit$grid
+sampling_rates <- sort(unique(grid$sampling_rate))
 grid$sampling_rate_label <- factor(
   grid$sampling_rate,
   levels = sampling_rates,
@@ -216,18 +206,6 @@ The two marginal fits should be compatible with the corresponding slices of
 the joint fit. Here we compare the cell-number marginal law with the joint law
 at full depth, and the UMI marginal law with the joint law at the full cell
 number.
-
-```{r grid-table}
-grid_out <- grid
-grid_out$I_fit <- fit$fitted
-grid_out$residual <- fit$residuals
-grid_summary <- summarize_mi(grid_out, by = c("n", "sampling_rate", "U"))
-fit_summary <- aggregate(I_fit ~ n + sampling_rate + U, data = grid_out, FUN = mean)
-resid_summary <- aggregate(residual ~ n + sampling_rate + U, data = grid_out, FUN = mean)
-grid_summary$I_fit <- fit_summary$I_fit
-grid_summary$residual <- resid_summary$residual
-grid_summary[, c("n", "sampling_rate", "U", "I_empirical", "I_sd", "I_fit", "residual", "n_replicates")]
-```
 
 ```{r marginal-joint-check, fig.width=11, fig.height=4.5}
 cell_joint_curve <- data.frame(n = n_curve, U = fit$reference$U_ref)
