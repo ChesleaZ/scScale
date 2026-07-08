@@ -18,7 +18,7 @@ adt_counts <- gse164378_3p_citeseq_hvg$adt_counts
 count_transform <- "log1p_cpm"
 
 sampling_rates <- c(0.10, 0.15, 0.20, 0.30, 0.40, 0.50, 0.70, 0.85, 1.00)
-joint_plot_rates <- c(0.20, 0.40, 0.50, 0.70, 1.00)
+joint_plot_rates <- c(0.20, 0.50, 1.00)
 n_grid <- c(500, 750, 1000, 1500, 2000, 3000, 4000)
 r_empirical <- 12
 ```
@@ -194,7 +194,7 @@ for (rho in joint_plot_rates) {
   obs_i <- joint_obs[joint_obs$sampling_rate == rho, ]
   obs_i <- obs_i[order(obs_i$n), ]
   draw_vertical_bars(obs_i$n, obs_i$I_empirical, obs_i$I_sd, col = rho_cols[as.character(rho)])
-  pred_i <- data.frame(n = seq(min(n_grid), max(n_grid), length.out = 200), U = U_i)
+  pred_i <- data.frame(n = seq(min(n_grid), max(n_grid), length.out = 300), U = U_i)
   pred_i$I_fit <- predict(fit, pred_i)
   lines(pred_i$n, pred_i$I_fit, col = rho_cols[as.character(rho)], lwd = 2)
 }
