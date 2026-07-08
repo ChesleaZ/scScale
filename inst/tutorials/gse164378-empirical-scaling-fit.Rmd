@@ -3,50 +3,50 @@ title: "Direct Empirical Scaling Fit With GSE164378 3' CITE-seq"
 output: html_document
 ---
 
-This tutorial runs the direct empirical scaling workflow on a compact subset of
-the GSE164378 3' CITE-seq PBMC example. Unlike the Gaussian spike workflow, this
-fit does not call spikes or fit an MP bulk. It samples an \(I(n,U)\) grid,
-computes fixed-rank empirical RNA-ADT mutual information at each grid point, and
-fits one global scaling surface.
+This tutorial runs the direct empirical scaling workflow on the same
+GSE164378 3' CITE-seq RNA-ADT example used by the Gaussian spike tutorials.
+Here we do not fit the spike model. We sample a grid of cell numbers and UMI
+depths, compute fixed-rank empirical RNA-ADT mutual information, and fit the
+empirical scaling law directly.
 
 ```{r setup}
 library(scScale)
 data(gse164378_3p_citeseq_hvg)
 
-rna_counts <- gse164378_3p_citeseq_hvg$rna_counts[1:800, 1:1500]
-adt_counts <- gse164378_3p_citeseq_hvg$adt_counts[, colnames(rna_counts)]
+rna_counts <- gse164378_3p_citeseq_hvg$rna_counts
+adt_counts <- gse164378_3p_citeseq_hvg$adt_counts
+count_transform <- "log1p_cpm"
 
-n_grid <- c(300, 600, 900)
-U_grid <- c(1000, 2000, 3000)
-r_empirical <- 6
+sampling_rates <- c(0.10, 0.20, 0.35, 0.50, 0.70, 0.85, 1.00)
+n_grid <- c(500, 1000, 2000, 4000)
+r_empirical <- 12
 ```
 
 ## Fit Empirical Scaling Law
 
-`scscale_empirical_scaling_fit()` is the all-in-one direct empirical workflow.
-It samples cells and UMI depth, preprocesses each sampled matrix in the standard
-way, computes empirical subspace MI, and fits the cell-number, UMI, and joint
-laws.
+`scscale_empirical_scaling_fit()` samples the grid, preprocesses each sampled
+matrix in the standard way, computes empirical subspace MI, and fits the
+cell-number, UMI, and joint laws into one object.
 
 ```{r fit-empirical-scaling}
 fit <- scscale_empirical_scaling_fit(
   rna_counts,
   adt_counts,
   n_grid = n_grid,
-  U_grid = U_grid,
+  sampling_rates = sampling_rates,
   r = r_empirical,
-  n_replicates = 2,
+  n_replicates = 1,
   n_ref = max(n_grid),
-  U_ref = max(U_grid),
+  U_ref = max(sampling_rates) * stats::median(Matrix::colSums(rna_counts)),
   joint_mode = "hybrid",
   seed = 164378,
-  count_transform = "log1p_cpm"
+  count_transform = count_transform
 )
 
 fit
 ```
 
-The fitted joint law uses one global parameter set across the grid.
+The fitted joint law uses one global parameter set across the sampled grid.
 
 ```{r fitted-parameters}
 data.frame(
@@ -58,17 +58,31 @@ data.frame(
 fit$ceiling
 ```
 
+```{r prepare-plot-data}
+grid <- fit$grid
+grid$sampling_rate_label <- factor(
+  grid$sampling_rate,
+  levels = sampling_rates,
+  labels = paste0("rho = ", sampling_rates)
+)
+
+rho_to_U <- aggregate(U ~ sampling_rate, data = grid, FUN = unique)
+rho_to_U <- rho_to_U[order(rho_to_U$sampling_rate), ]
+rho_cols <- setNames(
+  c("#0072B2", "#D55E00", "#009E73", "#CC79A7", "#56B4E9", "#E69F00", "#000000"),
+  as.character(rho_to_U$sampling_rate)
+)
+```
+
 ## Cell-Number Scaling
 
-The cell-number marginal fit uses the grid slice at the reference UMI depth.
+The cell-number marginal fit uses the full-depth grid slice.
 
-```{r cell-number-scaling, fig.width=6.5, fig.height=4.5}
-grid <- fit$grid
-cell_obs <- aggregate(I_empirical ~ n, data = subset(grid, U == fit$reference$U_ref), FUN = mean)
-cell_sd <- aggregate(I_empirical ~ n, data = subset(grid, U == fit$reference$U_ref), FUN = stats::sd)
-cell_obs$I_sd <- cell_sd$I_empirical
+```{r cell-number-scaling, fig.width=6.8, fig.height=4.6}
+cell_obs <- subset(grid, abs(U - fit$reference$U_ref) < 1e-8)
+cell_obs <- cell_obs[order(cell_obs$n), ]
 
-n_curve <- seq(min(n_grid), max(n_grid), length.out = 100)
+n_curve <- seq(min(n_grid), max(n_grid), length.out = 200)
 cell_curve <- data.frame(n = n_curve)
 cell_curve$I_fit <- predict(fit$cell_fit, cell_curve)
 
@@ -79,22 +93,12 @@ plot(
   col = "#0072B2",
   xlab = "Cell number n",
   ylab = expression(hat(I)(n~"|"~U[ref])),
-  main = "Cell-number scaling"
-)
-arrows(
-  cell_obs$n,
-  cell_obs$I_empirical - cell_obs$I_sd,
-  cell_obs$n,
-  cell_obs$I_empirical + cell_obs$I_sd,
-  angle = 90,
-  code = 3,
-  length = 0.04,
-  col = "#0072B2"
+  main = "Empirical cell-number scaling"
 )
 lines(cell_curve$n, cell_curve$I_fit, col = "#D55E00", lwd = 2)
 legend(
   "bottomright",
-  legend = c("empirical grid mean", "marginal fit"),
+  legend = c("empirical MI", "empirical fit"),
   col = c("#0072B2", "#D55E00"),
   pch = c(16, NA),
   lwd = c(NA, 2),
@@ -104,40 +108,30 @@ legend(
 
 ## UMI Scaling
 
-The UMI marginal fit uses the grid slice at the reference cell number.
+The UMI marginal fit uses the full-cell grid slice.
 
-```{r umi-scaling, fig.width=6.5, fig.height=4.5}
-umi_obs <- aggregate(I_empirical ~ U, data = subset(grid, n == fit$reference$n_ref), FUN = mean)
-umi_sd <- aggregate(I_empirical ~ U, data = subset(grid, n == fit$reference$n_ref), FUN = stats::sd)
-umi_obs$I_sd <- umi_sd$I_empirical
+```{r umi-scaling, fig.width=6.8, fig.height=4.6}
+umi_obs <- subset(grid, n == fit$reference$n_ref)
+umi_obs <- umi_obs[order(umi_obs$sampling_rate), ]
 
-U_curve <- seq(min(U_grid), max(U_grid), length.out = 100)
-umi_curve <- data.frame(U = U_curve)
+rho_curve <- seq(min(sampling_rates), max(sampling_rates), length.out = 200)
+U_curve <- rho_curve * stats::median(Matrix::colSums(rna_counts))
+umi_curve <- data.frame(U = U_curve, sampling_rate = rho_curve)
 umi_curve$I_fit <- predict(fit$umi_fit, umi_curve)
 
 plot(
-  umi_obs$U,
+  umi_obs$sampling_rate,
   umi_obs$I_empirical,
   pch = 16,
   col = "#0072B2",
-  xlab = "Median UMI per cell U",
+  xlab = expression("Sampling rate " * rho),
   ylab = expression(hat(I)(U~"|"~n[ref])),
-  main = "UMI scaling"
+  main = "Empirical UMI scaling"
 )
-arrows(
-  umi_obs$U,
-  umi_obs$I_empirical - umi_obs$I_sd,
-  umi_obs$U,
-  umi_obs$I_empirical + umi_obs$I_sd,
-  angle = 90,
-  code = 3,
-  length = 0.04,
-  col = "#0072B2"
-)
-lines(umi_curve$U, umi_curve$I_fit, col = "#D55E00", lwd = 2)
+lines(umi_curve$sampling_rate, umi_curve$I_fit, col = "#D55E00", lwd = 2)
 legend(
   "bottomright",
-  legend = c("empirical grid mean", "marginal fit"),
+  legend = c("empirical MI", "empirical fit"),
   col = c("#0072B2", "#D55E00"),
   pch = c(16, NA),
   lwd = c(NA, 2),
@@ -145,78 +139,66 @@ legend(
 )
 ```
 
-## Joint Scaling
+## Joint Scaling By UMI Level
 
-The joint fit uses all grid points and one global parameter set. The plot below
-shows a cell-number scaling curve at each UMI level.
+The joint fit uses all grid points and one global parameter set. Each line below
+is the fitted cell-number scaling curve at one UMI sampling rate.
 
-```{r joint-scaling-by-umi, fig.width=7.5, fig.height=5}
-joint_obs <- aggregate(I_empirical ~ n + U, data = grid, FUN = mean)
-joint_sd <- aggregate(I_empirical ~ n + U, data = grid, FUN = stats::sd)
-joint_obs$I_sd <- joint_sd$I_empirical
-
-cols <- setNames(c("#0072B2", "#D55E00", "#009E73"), as.character(U_grid))
+```{r joint-scaling-by-umi, fig.width=8, fig.height=5.2}
 plot(
   NA,
   xlim = range(n_grid),
-  ylim = range(c(joint_obs$I_empirical, fit$fitted), na.rm = TRUE),
+  ylim = range(c(grid$I_empirical, fit$fitted), na.rm = TRUE),
   xlab = "Cell number n",
   ylab = expression(hat(I)(n,U)),
-  main = "Joint empirical scaling by UMI level"
+  main = "Empirical joint scaling by UMI level"
 )
 
-for (U_i in U_grid) {
-  obs_i <- joint_obs[joint_obs$U == U_i, ]
+for (rho in sampling_rates) {
+  U_i <- rho_to_U$U[rho_to_U$sampling_rate == rho]
+  obs_i <- grid[grid$sampling_rate == rho, ]
   obs_i <- obs_i[order(obs_i$n), ]
-  points(obs_i$n, obs_i$I_empirical, pch = 16, col = cols[as.character(U_i)])
-  arrows(
-    obs_i$n,
-    obs_i$I_empirical - obs_i$I_sd,
-    obs_i$n,
-    obs_i$I_empirical + obs_i$I_sd,
-    angle = 90,
-    code = 3,
-    length = 0.035,
-    col = cols[as.character(U_i)]
-  )
-  pred_i <- data.frame(n = seq(min(n_grid), max(n_grid), length.out = 100), U = U_i)
+  points(obs_i$n, obs_i$I_empirical, pch = 16, col = rho_cols[as.character(rho)])
+  pred_i <- data.frame(n = seq(min(n_grid), max(n_grid), length.out = 200), U = U_i)
   pred_i$I_fit <- predict(fit, pred_i)
-  lines(pred_i$n, pred_i$I_fit, col = cols[as.character(U_i)], lwd = 2)
+  lines(pred_i$n, pred_i$I_fit, col = rho_cols[as.character(rho)], lwd = 2)
 }
 
 legend(
   "bottomright",
-  legend = paste("U =", U_grid),
-  col = cols,
+  legend = paste0("rho = ", sampling_rates),
+  col = rho_cols[as.character(sampling_rates)],
   pch = 16,
   lwd = 2,
-  bty = "n"
+  bty = "n",
+  cex = 0.85
 )
 ```
 
 ## Grid and Residuals
 
-```{r grid-and-residuals, fig.width=7, fig.height=4.5}
-grid_out <- fit$grid
+```{r grid-and-residuals, fig.width=7.2, fig.height=4.8}
+grid_out <- grid
 grid_out$I_fit <- fit$fitted
 grid_out$residual <- fit$residuals
-grid_out[, c("n", "U", "replicate", "I_empirical", "I_fit", "residual", "r_eff")]
+grid_out[, c("n", "sampling_rate", "U", "I_empirical", "I_fit", "residual", "r_eff")]
 
 plot(
   grid_out$I_fit,
   grid_out$residual,
   pch = 16,
-  col = cols[as.character(grid_out$U)],
+  col = rho_cols[as.character(grid_out$sampling_rate)],
   xlab = "Fitted I(n,U)",
   ylab = "Residual",
-  main = "Joint fit residuals"
+  main = "Joint empirical fit residuals"
 )
 abline(h = 0, lty = 2, col = "grey40")
 legend(
   "topright",
-  legend = paste("U =", U_grid),
-  col = cols,
+  legend = paste0("rho = ", sampling_rates),
+  col = rho_cols[as.character(sampling_rates)],
   pch = 16,
-  bty = "n"
+  bty = "n",
+  cex = 0.85
 )
 ```
