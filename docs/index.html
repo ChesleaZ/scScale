@@ -123,23 +123,18 @@ joint <- scscale_cell_number_by_umi_mi(pair, umi, n_grid = c(500, 1000, 2000, 40
 empirical <- scscale_empirical_mi(rna_counts, adt_counts)</code></pre>
 
     <h2>Direct Empirical Scaling</h2>
-    <pre><code>grid <- scscale_empirical_inu_grid(
+    <pre><code>fit <- scscale_empirical_scaling_fit(
   rna_counts,
   adt_counts,
   n_grid = c(500, 1000, 2000, 4000),
   U_grid = c(1000, 3000, 10000),
   r = 10,
-  n_replicates = 3
+  n_replicates = 3,
+  joint_mode = "hybrid"
 )
 
-cell_fit <- scscale_fit_empirical_cell_law(subset(grid, U == 10000))
-umi_fit <- scscale_fit_empirical_umi_law(subset(grid, n == 4000))
-joint_fit <- scscale_fit_empirical_joint_law(
-  grid,
-  cell_fit = cell_fit,
-  umi_fit = umi_fit,
-  mode = "hybrid"
-)</code></pre>
+fit$joint_fit
+fit$ceiling</code></pre>
 
     <h2>Tutorials</h2>
     <p>The current RNA-ADT tutorial is the recommended entry point. Older diagnostics remain available for provenance and deeper checks.</p>

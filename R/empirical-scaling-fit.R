@@ -286,6 +286,137 @@ scscale_empirical_global_ceiling <- function(cell_fit, umi_fit, n0, U0) {
   c(from_cell_marginal = from_cell, from_umi_marginal = from_umi, average = mean(c(from_cell, from_umi)))
 }
 
+scscale_nearest_grid_value <- function(values, target, label) {
+  values <- sort(unique(as.numeric(values)))
+  values <- values[is.finite(values)]
+  if (!length(values)) stop(label, " grid is empty.", call. = FALSE)
+  if (is.null(target)) return(max(values))
+  target <- as.numeric(target)
+  if (!is.finite(target)) stop(label, " reference must be finite.", call. = FALSE)
+  values[which.min(abs(values - target))]
+}
+
+scscale_empirical_scaling_fit <- function(
+  x,
+  target,
+  n_grid,
+  U_grid = NULL,
+  sampling_rates = NULL,
+  r = 10,
+  n_replicates = 1,
+  n_ref = NULL,
+  U_ref = NULL,
+  joint_mode = c("hybrid", "transfer", "free"),
+  seed = 1,
+  input = c("counts", "normalized"),
+  target_input = input,
+  target_depth = 1e4,
+  count_transform = c("log1p_cpm", "pearson_residual", "log1p"),
+  center = TRUE,
+  scale = FALSE,
+  eps = 1e-12,
+  use_irlba = TRUE,
+  cell_start = NULL,
+  umi_start = NULL,
+  joint_start = NULL,
+  cell_control = list(maxit = 10000),
+  umi_control = list(maxit = 10000),
+  joint_control = list(maxit = 20000)
+) {
+  joint_mode <- match.arg(joint_mode)
+  input <- match.arg(input)
+  target_input <- match.arg(target_input, choices = c("counts", "normalized"))
+  count_transform <- match.arg(count_transform)
+
+  grid <- scscale_empirical_inu_grid(
+    x = x,
+    target = target,
+    n_grid = n_grid,
+    U_grid = U_grid,
+    sampling_rates = sampling_rates,
+    r = r,
+    n_replicates = n_replicates,
+    seed = seed,
+    input = input,
+    target_input = target_input,
+    target_depth = target_depth,
+    count_transform = count_transform,
+    center = center,
+    scale = scale,
+    eps = eps,
+    use_irlba = use_irlba
+  )
+
+  n_ref <- scscale_nearest_grid_value(grid$n, n_ref, "n")
+  U_ref <- scscale_nearest_grid_value(grid$U, U_ref, "U")
+  cell_data <- grid[grid$U == U_ref, , drop = FALSE]
+  umi_data <- grid[grid$n == n_ref, , drop = FALSE]
+  if (nrow(cell_data) < 3L) {
+    stop("cell marginal fit needs at least three grid rows at U_ref = ", U_ref, ".", call. = FALSE)
+  }
+  if (nrow(umi_data) < 3L) {
+    stop("UMI marginal fit needs at least three grid rows at n_ref = ", n_ref, ".", call. = FALSE)
+  }
+
+  cell_fit <- scscale_fit_empirical_cell_law(
+    cell_data,
+    n_col = "n",
+    mi_col = "I_empirical",
+    start = cell_start,
+    control = cell_control
+  )
+  umi_fit <- scscale_fit_empirical_umi_law(
+    umi_data,
+    U_col = "U",
+    mi_col = "I_empirical",
+    start = umi_start,
+    control = umi_control
+  )
+  joint_fit <- scscale_fit_empirical_joint_law(
+    grid,
+    n_col = "n",
+    U_col = "U",
+    mi_col = "I_empirical",
+    cell_fit = cell_fit,
+    umi_fit = umi_fit,
+    mode = joint_mode,
+    start = joint_start,
+    control = joint_control
+  )
+
+  ceiling <- scscale_empirical_global_ceiling(cell_fit, umi_fit, n0 = n_ref, U0 = U_ref)
+  joint_coef <- c(joint_fit$coefficients, joint_fit$fixed)
+  ceiling <- c(ceiling, joint_fit = joint_coef[["I_infinity"]])
+  ceiling <- c(ceiling, max_abs_gap_to_joint = max(abs(ceiling[c("from_cell_marginal", "from_umi_marginal")] - ceiling[["joint_fit"]])))
+
+  fitted <- stats::predict(joint_fit, grid)
+  out <- list(
+    call = match.call(),
+    grid = grid,
+    cell_fit = cell_fit,
+    umi_fit = umi_fit,
+    joint_fit = joint_fit,
+    ceiling = ceiling,
+    reference = list(n_ref = n_ref, U_ref = U_ref),
+    r = r,
+    n_replicates = n_replicates,
+    joint_mode = joint_mode,
+    fitted = fitted,
+    residuals = grid$I_empirical - fitted,
+    metrics = joint_fit$metrics,
+    preprocessing = list(
+      input = input,
+      target_input = target_input,
+      target_depth = target_depth,
+      count_transform = count_transform,
+      center = center,
+      scale = scale
+    )
+  )
+  class(out) <- "scscale_empirical_inu_fit"
+  out
+}
+
 scscale_empirical_inu_grid <- function(
   x,
   target,
@@ -430,5 +561,23 @@ print.scscale_empirical_scaling_fit <- function(x, ...) {
     print(signif(x$fixed, 5))
   }
   cat("  rmse: ", signif(x$metrics$rmse, 5), "  convergence: ", x$convergence, "\n", sep = "")
+  invisible(x)
+}
+
+predict.scscale_empirical_inu_fit <- function(object, newdata = NULL, ...) {
+  stats::predict(object$joint_fit, newdata = newdata, ...)
+}
+
+print.scscale_empirical_inu_fit <- function(x, ...) {
+  cat("scScale direct empirical I(n,U) fit\n")
+  cat("  grid rows: ", nrow(x$grid), "\n", sep = "")
+  cat("  rank: ", x$r, "  replicates: ", x$n_replicates, "\n", sep = "")
+  cat("  reference: n_ref=", x$reference$n_ref, ", U_ref=", signif(x$reference$U_ref, 5), "\n", sep = "")
+  cat("  joint mode: ", x$joint_mode, "\n", sep = "")
+  coef <- c(x$joint_fit$coefficients, x$joint_fit$fixed)
+  cat("  I_infinity: ", signif(coef[["I_infinity"]], 5), "\n", sep = "")
+  cat("  joint rmse: ", signif(x$metrics$rmse, 5), "\n", sep = "")
+  cat("  ceiling diagnostics:\n")
+  print(signif(x$ceiling, 5))
   invisible(x)
 }
