@@ -6,6 +6,7 @@
 \alias{scscale_predict_empirical_joint}
 \alias{scscale_plot_empirical_fit}
 \alias{scscale_plot_empirical_umi_levels}
+\alias{scscale_empirical_inu_grid_corrected}
 \title{Inspect, Predict, and Plot Direct Empirical Scaling Fits}
 \usage{
 scscale_empirical_values(object, summarize = FALSE)
@@ -26,10 +27,38 @@ scscale_plot_empirical_fit(object, type = c("both", "cell", "umi"),
 
 scscale_plot_empirical_umi_levels(object, sampling_rate = NULL, U = NULL,
   n_points = 300, ...)
+
+scscale_empirical_inu_grid_corrected(x, target, batch = NULL, n_grid = NULL,
+  cell_sampling_rates = c(0.125, 0.1875, 0.25, 0.375, 0.50, 0.75,
+  1.00), U_grid = NULL,
+  sampling_rates = c(0.10, 0.15, 0.20, 0.30, 0.40, 0.50, 0.70, 0.85,
+  1.00), r = 10, cell_replicates = 10, umi_replicates = 1,
+  n_workers = 1, correction = c("custom", "scvi"), correction_fun = NULL,
+  correction_cache = NULL, correction_options = list(), seed = 1,
+  input = c("counts", "normalized"), corrected_input = c("normalized",
+  "counts"), target_input = input, target_depth = 1e4,
+  count_transform = c("log1p_cpm", "pearson_residual", "log1p"),
+  center = TRUE, scale = FALSE, eps = 1e-12, use_irlba = TRUE)
 }
 \arguments{
 \item{object}{A \code{scscale_empirical_inu_fit} object returned by
 \code{\link{scscale_empirical_scaling_fit}}.}
+\item{x}{Feature-by-cell source matrix.}
+\item{target}{Feature-by-cell target matrix or cell-level target vector.}
+\item{batch}{Optional cell-level batch vector passed to \code{correction_fun}.}
+\item{n_grid, cell_sampling_rates, U_grid, sampling_rates}{Cell-number and UMI
+sampling grids. Provide one cell grid and one UMI grid.}
+\item{r}{Fixed rank used for empirical subspace MI.}
+\item{cell_replicates, umi_replicates}{Cell-sampling and full-matrix UMI
+thinning replicates.}
+\item{n_workers}{Number of parallel workers for cell-sampling replicates.}
+\item{correction, correction_fun, correction_cache, correction_options}{Staged
+correction controls. \code{correction_fun} receives a full UMI-thinned count
+matrix, the aligned target, and the aligned batch vector, and must return a
+feature-by-cell corrected matrix.}
+\item{seed}{Random seed base.}
+\item{input, corrected_input, target_input, target_depth, count_transform,
+center, scale, eps, use_irlba}{Preprocessing and empirical MI controls.}
 \item{summarize}{Whether to aggregate empirical MI values over replicate
 samples at each grid point.}
 \item{cell_sampling_rate, sampling_rate}{Cell-number and UMI sampling rates.}
@@ -44,13 +73,18 @@ regular prediction curves.}
 Convenience helpers for working with a fitted direct empirical scaling object.
 They expose the sampled empirical MI values, fitted parameters, marginal
 predictions, joint predictions over the full cell-by-UMI combination, and base R
-diagnostic plots.
+diagnostic plots. \code{scscale_empirical_inu_grid_corrected()} is the staged
+batch-aware grid engine used by \code{scscale_empirical_scaling_fit()} when
+correction is requested: it UMI-thins the full raw matrix, applies a correction
+function once per UMI level/replicate, and then computes MI over replicated cell
+subsamples from the corrected representation.
 }
 \value{
 \code{scscale_empirical_values()} returns a data frame of empirical grid values
 and fitted joint predictions. \code{scscale_empirical_parameters()} returns a
 data frame of fitted parameters and ceiling diagnostics. Prediction helpers
 return data frames with inputs and \code{I_fit}. Plot helpers return
-\code{object} invisibly.
+\code{object} invisibly. \code{scscale_empirical_inu_grid_corrected()} returns
+an empirical MI grid data frame.
 }
 \keyword{models}
