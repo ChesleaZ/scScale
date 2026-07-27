@@ -89,6 +89,10 @@ cell_by_umi_theory <- scscale_cell_number_by_umi_mi(
 )
 
 umi_theory$curve[, c("sampling_rate", "r_X", "I_theory", "I_infinity")]
+
+# Saved linear calibration for every full-depth RNA spike rank.
+umi_theory$q_fit_rate
+umi_theory$q_total_rate_fit
 ```
 
 ## Empirical Curves

@@ -366,12 +366,98 @@ scscale_umi_mi <- function(
     P_by_rate[[i]] <- P
   }
 
+  curve <- do.call(rbind, rows)
+  reference_ranks <- seq_len(pair$r_X)
+  scaling <- do.call(rbind, lapply(seq_along(sampling_rates), function(i) {
+    fit_rho <- fit_by_rate[[i]]
+    q_all <- fit_rho$spikes$q_X[reference_ranks]
+    theta_all <- fit_rho$theta_X[reference_ranks]
+    data.frame(
+      sampling_rate = sampling_rates[[i]],
+      total_umi_observed = curve$total_umi_observed[[i]],
+      rank = reference_ranks,
+      q_X = q_all,
+      theta_X = theta_all,
+      is_detected = reference_ranks <= curve$r_X[[i]],
+      c_X = fit_rho$c_X
+    )
+  }))
+  q_fit_rate <- do.call(rbind, lapply(split(scaling, scaling$rank), function(df) {
+    can_fit <- nrow(df) >= 2L && length(unique(df$sampling_rate)) >= 2L
+    if (can_fit) {
+      model <- stats::lm(q_X ~ sampling_rate, data = df)
+      intercept <- unname(stats::coef(model)[[1]])
+      slope <- unname(stats::coef(model)[[2]])
+      r_squared <- summary(model)$r.squared
+      if (!is.finite(r_squared)) r_squared <- NA_real_
+    } else {
+      intercept <- df$q_X[[1]]
+      slope <- NA_real_
+      r_squared <- NA_real_
+    }
+    data.frame(
+      rank = df$rank[[1]],
+      q_rate_intercept = intercept,
+      q_rate_slope = slope,
+      q_rate_r2 = r_squared,
+      n_rates = nrow(df),
+      n_detected_rates = sum(df$is_detected)
+    )
+  }))
+  q_fit_rate <- q_fit_rate[order(q_fit_rate$rank), , drop = FALSE]
+  scaling <- merge(
+    scaling,
+    q_fit_rate,
+    by = "rank",
+    all.x = TRUE,
+    sort = FALSE
+  )
+  scaling$q_X_rate_hat <- with(
+    scaling,
+    q_rate_intercept + q_rate_slope * sampling_rate
+  )
+  scaling <- scaling[order(scaling$sampling_rate, scaling$rank), , drop = FALSE]
+
+  q_total <- stats::aggregate(
+    scaling["q_X"],
+    by = scaling["sampling_rate"],
+    FUN = sum
+  )
+  names(q_total)[names(q_total) == "q_X"] <- "q_total"
+  can_fit_total <- nrow(q_total) >= 2L &&
+    length(unique(q_total$sampling_rate)) >= 2L
+  if (can_fit_total) {
+    total_model <- stats::lm(q_total ~ sampling_rate, data = q_total)
+    total_intercept <- unname(stats::coef(total_model)[[1]])
+    total_slope <- unname(stats::coef(total_model)[[2]])
+    total_r_squared <- summary(total_model)$r.squared
+    if (!is.finite(total_r_squared)) total_r_squared <- NA_real_
+    q_total$q_total_rate_hat <- unname(
+      stats::predict(total_model, newdata = q_total)
+    )
+  } else {
+    total_intercept <- q_total$q_total[[1]]
+    total_slope <- NA_real_
+    total_r_squared <- NA_real_
+    q_total$q_total_rate_hat <- NA_real_
+  }
+  q_total_rate_fit <- data.frame(
+    q_total_rate_intercept = total_intercept,
+    q_total_rate_slope = total_slope,
+    q_total_rate_r2 = total_r_squared,
+    n_rates = nrow(q_total)
+  )
+
   out <- list(
-    curve = do.call(rbind, rows),
+    curve = curve,
     q_by_rate = q_by_rate,
     fit_by_rate = fit_by_rate,
     P_by_rate = P_by_rate,
-    sampling_rates = sampling_rates
+    sampling_rates = sampling_rates,
+    scaling = scaling,
+    q_fit_rate = q_fit_rate,
+    q_total = q_total,
+    q_total_rate_fit = q_total_rate_fit
   )
   class(out) <- "scscale_umi_mi"
   out

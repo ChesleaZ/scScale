@@ -22,8 +22,13 @@ return both the refitted theory MI curve and the refitted \code{I_infinity}
 bound.
 }
 \value{
-A \code{scscale_umi_mi} object with \code{curve}, \code{q_by_rate},
-\code{fit_by_rate}, and \code{P_by_rate}.
+A \code{scscale_umi_mi} object with depth-level \code{curve}, raw
+\code{q_by_rate}, \code{fit_by_rate}, and \code{P_by_rate} outputs, plus
+\code{scaling}, \code{q_fit_rate}, \code{q_total}, and
+\code{q_total_rate_fit}. The \code{q_fit_rate} table stores the per-reference-
+spike intercept, slope, and \eqn{R^2} from
+\code{q_X ~ sampling_rate}; \code{scaling$q_X_rate_hat} stores the corresponding
+fitted values.
 }
 \examples{
 data(gse164378_3p_citeseq_hvg)
