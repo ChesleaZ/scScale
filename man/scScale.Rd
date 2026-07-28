@@ -7,7 +7,11 @@ Gaussian spike fitting and low-rank spectral mutual information utilities for
 single-cell scaling-law analyses.
 }
 \details{
-The recommended paired-modality workflow is:
+The recommended paired-modality workflow is a single call to
+\code{\link{scscale}}. It fits the full-depth pair, UMI-depth scaling,
+cell-number scaling, and the joint \eqn{I(n,U)} grid.
+
+The corresponding low-level workflow is:
 \enumerate{
 \item Fit matched modalities once with \code{\link{scscale_pair_fit}}.
 \item Fit UMI-depth scaling with \code{\link{scscale_umi_mi}}.
@@ -21,6 +25,7 @@ All theory curves are routed through \code{\link{scscale_low_rank_mi}}, the
 single low-rank subspace-alignment MI formula.
 }
 \seealso{
+\code{\link{scscale}},
 \code{\link{scscale_fit}},
 \code{\link{scscale_pair_fit}},
 \code{\link{scscale_low_rank_mi}},

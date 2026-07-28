@@ -300,6 +300,227 @@ scscale_pair_fit <- function(
   out
 }
 
+scscale <- function(
+  x,
+  y,
+  umi_sampling_rates = c(0.10, 0.20, 0.35, 0.50, 0.70, 0.85, 1.00),
+  n_grid = NULL,
+  n_min = NULL,
+  n_points = 12L,
+  count_transform = c("log1p_cpm", "pearson_residual", "log1p"),
+  mp_max_iter = 300,
+  mp_grid_n = 3000,
+  seed = 1,
+  use_irlba = TRUE,
+  ...
+) {
+  matched_call <- match.call()
+  count_transform <- match.arg(count_transform)
+
+  umi_sampling_rates <- sort(unique(as.numeric(umi_sampling_rates)))
+  if (length(umi_sampling_rates) < 2L ||
+      any(!is.finite(umi_sampling_rates) |
+          umi_sampling_rates <= 0 |
+          umi_sampling_rates > 1)) {
+    stop(
+      "umi_sampling_rates must contain at least two unique values in (0, 1].",
+      call. = FALSE
+    )
+  }
+
+  pair <- scscale_pair_fit(
+    x,
+    y,
+    count_transform = count_transform,
+    mp_max_iter = mp_max_iter,
+    mp_grid_n = mp_grid_n,
+    use_irlba = use_irlba,
+    ...
+  )
+
+  if (is.null(n_grid)) {
+    n_max <- as.integer(pair$x_fit$n)
+    if (!is.finite(n_max) || n_max < 2L) {
+      stop("At least two aligned cells are required.", call. = FALSE)
+    }
+    n_points <- as.integer(n_points)
+    if (!is.finite(n_points) || n_points < 2L) {
+      stop("n_points must be an integer of at least two.", call. = FALSE)
+    }
+    if (is.null(n_min)) {
+      n_min <- max(4L * as.integer(pair$r_X), 500L)
+      if (n_min > n_max) n_min <- max(2L, floor(n_max / 2L))
+    }
+    n_min <- as.integer(n_min)
+    if (!is.finite(n_min) || n_min < 2L || n_min > n_max) {
+      stop("n_min must be between 2 and the number of cells in x.", call. = FALSE)
+    }
+    n_grid <- unique(round(exp(seq(log(n_min), log(n_max), length.out = n_points))))
+  } else {
+    n_grid <- sort(unique(as.integer(n_grid)))
+    n_grid <- n_grid[is.finite(n_grid) & n_grid >= 2L]
+    if (!length(n_grid)) {
+      stop("n_grid must contain at least one cell count of two or greater.", call. = FALSE)
+    }
+    if (any(n_grid > pair$x_fit$n)) {
+      stop("n_grid cannot exceed the number of cells in x.", call. = FALSE)
+    }
+  }
+
+  umi <- scscale_umi_mi(
+    pair,
+    x_counts = x,
+    sampling_rates = umi_sampling_rates,
+    count_transform = count_transform,
+    seed = seed,
+    mp_max_iter = mp_max_iter,
+    mp_grid_n = mp_grid_n,
+    use_irlba = use_irlba
+  )
+  cell <- scscale_cell_number_mi(pair, n_grid = n_grid)
+  joint <- scscale_cell_number_by_umi_mi(
+    pair,
+    umi,
+    n_grid = n_grid,
+    sampling_rates = umi_sampling_rates
+  )
+
+  out <- list(
+    call = matched_call,
+    pair = pair,
+    umi = umi,
+    cell = cell,
+    joint = joint,
+    grids = list(
+      n = n_grid,
+      umi_sampling_rates = umi_sampling_rates
+    ),
+    parameters = list(
+      x_spikes = pair$x_fit$spikes,
+      y_spikes = pair$y_fit$spikes %||% NULL,
+      P = pair$P,
+      q_fit_rate = umi$q_fit_rate,
+      q_total_rate_fit = umi$q_total_rate_fit
+    )
+  )
+  class(out) <- "scscale_model"
+  out
+}
+
+print.scscale_model <- function(x, ...) {
+  cat("scScale joint model\n")
+  cat("  cells:", x$pair$x_fit$n, "\n")
+  cat("  X features:", x$pair$x_fit$p, "\n")
+  cat("  X spikes:", x$pair$r_X, "\n")
+  cat("  Y dimensions:", x$pair$r_Y, "\n")
+  cat("  UMI rates:", paste(x$grids$umi_sampling_rates, collapse = ", "), "\n")
+  cat(
+    "  cell grid:",
+    min(x$grids$n),
+    "to",
+    max(x$grids$n),
+    paste0("(", length(x$grids$n), " points)\n")
+  )
+  invisible(x)
+}
+
+plot.scscale_model <- function(
+  x,
+  type = c("umi", "cell", "joint"),
+  ...
+) {
+  type <- match.arg(type)
+  dots <- list(...)
+  draw_plot <- function(defaults) {
+    do.call(graphics::plot, utils::modifyList(defaults, dots))
+  }
+
+  if (type == "umi") {
+    curve <- x$umi$curve[order(x$umi$curve$sampling_rate), , drop = FALSE]
+    draw_plot(list(
+      x = curve$sampling_rate,
+      y = curve$I_theory,
+      type = "b",
+      pch = 16,
+      col = "#0072B2",
+      ylim = range(c(curve$I_theory, curve$I_infinity), finite = TRUE),
+      xlab = expression("UMI sampling rate " * rho),
+      ylab = expression(I[theory]),
+      main = "UMI scaling"
+    ))
+    graphics::lines(
+      curve$sampling_rate,
+      curve$I_infinity,
+      col = "grey35",
+      lwd = 2,
+      lty = 2
+    )
+    graphics::legend(
+      "bottomright",
+      legend = c("theory", expression(I[infinity])),
+      col = c("#0072B2", "grey35"),
+      pch = c(16, NA),
+      lwd = c(1, 2),
+      lty = c(1, 2),
+      bty = "n"
+    )
+    return(invisible(curve))
+  }
+
+  if (type == "cell") {
+    curve <- x$cell[order(x$cell$n), , drop = FALSE]
+    draw_plot(list(
+      x = curve$n,
+      y = curve$I_theory,
+      type = "b",
+      pch = 16,
+      col = "#0072B2",
+      ylim = range(c(curve$I_theory, x$pair$I_infinity), finite = TRUE),
+      xlab = "Cell number n",
+      ylab = expression(I[theory]),
+      main = "Cell-number scaling"
+    ))
+    graphics::abline(h = x$pair$I_infinity, col = "grey35", lwd = 2, lty = 2)
+    graphics::legend(
+      "bottomright",
+      legend = c("theory", expression(I[infinity])),
+      col = c("#0072B2", "grey35"),
+      pch = c(16, NA),
+      lwd = c(1, 2),
+      lty = c(1, 2),
+      bty = "n"
+    )
+    return(invisible(curve))
+  }
+
+  grid <- x$joint
+  rates <- sort(unique(grid$sampling_rate))
+  cols <- grDevices::hcl.colors(length(rates), palette = "Dark 3")
+  draw_plot(list(
+    x = NA_real_,
+    xlim = range(grid$n, finite = TRUE),
+    ylim = range(grid$I_theory, finite = TRUE),
+    xlab = "Cell number n",
+    ylab = expression(I[theory](n, rho)),
+    main = expression("Joint " * I(n, U) * " scaling")
+  ))
+  for (i in seq_along(rates)) {
+    curve <- grid[grid$sampling_rate == rates[[i]], , drop = FALSE]
+    curve <- curve[order(curve$n), , drop = FALSE]
+    graphics::lines(curve$n, curve$I_theory, col = cols[[i]], lwd = 2)
+    graphics::points(curve$n, curve$I_theory, col = cols[[i]], pch = 16)
+  }
+  graphics::legend(
+    "bottomright",
+    legend = paste0("rho=", rates),
+    col = cols,
+    pch = 16,
+    lwd = 2,
+    bty = "n"
+  )
+  invisible(grid)
+}
+
 scscale_umi_mi <- function(
   pair,
   x_counts,

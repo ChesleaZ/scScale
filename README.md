@@ -4,7 +4,12 @@
 Gaussian spike models to count matrices and uses one low-rank subspace-alignment
 mutual information formula to study matched RNA/ADT modalities.
 
-The main workflow is intentionally small:
+The main workflow is one call:
+
+- `scscale()` fits the matched modalities, UMI-depth scaling, cell-number
+  scaling, and the joint \(I(n,U)\) surface.
+
+The lower-level functions used internally are:
 
 - `scscale_pair_fit()` fits the two modalities once and stores their aligned
   low-rank subspaces.
@@ -23,10 +28,16 @@ data(gse164378_3p_citeseq_hvg)
 x <- gse164378_3p_citeseq_hvg$rna_counts
 y <- gse164378_3p_citeseq_hvg$adt_counts
 
-pair <- scscale_pair_fit(x, y)
-umi <- scscale_umi_mi(pair, x, sampling_rates = c(0.25, 0.5, 1))
-cells <- scscale_cell_number_mi(pair, n_grid = c(500, 1000, 2000, 4000))
-joint <- scscale_cell_number_by_umi_mi(pair, umi, n_grid = c(500, 1000, 2000, 4000))
+model <- scscale(x, y)
+
+model$pair
+model$umi
+model$cell
+model$joint
+
+plot(model, type = "umi")
+plot(model, type = "cell")
+plot(model, type = "joint")
 ```
 
 ## Installation

@@ -1,275 +1,94 @@
 ---
-title: "RNA-ADT Mutual Information With GSE164378 3' CITE-seq"
+title: "Complete RNA-ADT Scaling With GSE164378 3' CITE-seq"
 output: html_document
 ---
 
-This tutorial runs the paired-modality `scScale` workflow on 4,000 matched
-GSE164378 3' CITE-seq PBMC cells. The RNA side has 2,000 HVGs and the ADT side
-has 228 antibody features.
+This tutorial fits the complete `scScale` model to 4,000 matched GSE164378
+3' CITE-seq PBMC cells. The RNA matrix has 2,000 highly variable genes and the
+ADT matrix has 228 antibody features.
 
-The package-level scaling API has three pieces:
-
-1. `scscale_umi_mi()` for UMI-depth scaling.
-2. `scscale_cell_number_mi()` for cell-number scaling.
-3. `scscale_cell_number_by_umi_mi()` for the joint cell-number by UMI grid.
-
-Empirical curves are direct calls to `scscale_empirical_mi()`.
-All three theory functions use the same low-rank MI formula,
-`scscale_low_rank_mi()`, after preparing the appropriate recoverability values
-and RNA-ADT subspace alignment matrix.
+The main interface takes the two matched feature-by-cell count matrices and
+returns the full-depth fit, UMI scaling, cell-number scaling, and joint
+\(I(n,U)\) grid in one object.
 
 ```{r setup}
 library(scScale)
 data(gse164378_3p_citeseq_hvg)
 
-rna_counts <- gse164378_3p_citeseq_hvg$rna_counts
-adt_counts <- gse164378_3p_citeseq_hvg$adt_counts
-count_transform <- "log1p_cpm"
-r_empirical <- 12
+X <- gse164378_3p_citeseq_hvg$rna_counts
+Y <- gse164378_3p_citeseq_hvg$adt_counts
 
-dim(rna_counts)
-dim(adt_counts)
+dim(X)
+dim(Y)
 ```
 
-## Fit Modalities
+## Fit Everything
 
-`scscale_pair_fit()` fits MAD-based spike models for RNA and ADT, then builds
-the RNA-ADT subspace-overlap matrix used by theoretical MI.
+The default UMI grid is
+`c(0.10, 0.20, 0.35, 0.50, 0.70, 0.85, 1.00)`. The cell-number grid is
+generated automatically using absolute, log-spaced cell counts.
 
-```{r fit-modalities}
-pair <- scscale_pair_fit(
-  rna_counts,
-  adt_counts,
-  count_transform = count_transform,
-  mp_grid_n = 3000
-)
-
-data.frame(
-  modality = c("RNA", "ADT"),
-  p = c(pair$x_fit$p, pair$y_fit$p),
-  n = c(pair$x_fit$n, pair$y_fit$n),
-  n_spikes = c(pair$r_X, pair$r_Y),
-  tau2 = c(pair$x_fit$bulk$tau2, pair$y_fit$bulk$tau2),
-  lambda_plus = c(pair$x_fit$bulk$lambda_plus, pair$y_fit$bulk$lambda_plus),
-  method = c(pair$x_fit$bulk$method, pair$y_fit$bulk$method)
-)
-
-data.frame(
-  I_theory = pair$mi$I_theory,
-  I_empirical = pair$mi$I_empirical,
-  I_infinity = pair$I_infinity
-)
-```
-
-## Theory Curves
-
-The UMI curve refits the RNA spike model at each depth, so both
-`I_theory` and `I_infinity` use the BBP-detectable rank at that UMI level.
-
-```{r theory-curves}
-sampling_rates <- c(0.10, 0.20, 0.35, 0.50, 0.70, 0.85, 1.00)
-rho_grid <- c(0.35, 0.50, 0.70, 0.85, 1.00)
-n_grid <- c(500, 1000, 2000, 4000)
-
-umi_theory <- scscale_umi_mi(
-  pair,
-  rna_counts,
-  sampling_rates = sampling_rates,
-  count_transform = count_transform,
+```{r complete-fit}
+model <- scscale(
+  X,
+  Y,
   seed = 164378
 )
 
-cell_theory <- scscale_cell_number_mi(pair, n_grid = n_grid)
-
-cell_by_umi_theory <- scscale_cell_number_by_umi_mi(
-  pair,
-  umi_theory,
-  n_grid = n_grid,
-  sampling_rates = rho_grid
-)
-
-umi_theory$curve[, c("sampling_rate", "r_X", "I_theory", "I_infinity")]
-
-# Saved linear calibration for every full-depth RNA spike rank.
-umi_theory$q_fit_rate
-umi_theory$q_total_rate_fit
+model
 ```
 
-## Empirical Curves
+The complete result is organized into four main components:
 
-The empirical curves use the same subspace-overlap MI estimator directly on
-downsampled or subsetted count matrices.
+```{r inspect-fit}
+names(model)
 
-```{r empirical-curves}
-summarize_empirical <- function(x) {
-  out <- aggregate(I_empirical ~ sampling_rate + n, data = x, FUN = mean)
-  out$I_empirical_sd <- aggregate(I_empirical ~ sampling_rate + n, data = x, FUN = stats::sd)$I_empirical
-  out$n_replicates <- length(unique(x$replicate))
-  out
-}
-
-umi_empirical <- do.call(rbind, lapply(seq_along(sampling_rates), function(i) {
-  rho <- sampling_rates[i]
-  rna_sub <- rna_counts
-  if (rho < 1) {
-    rna_sub <- scscale_downsample_counts_fraction(rna_sub, fraction = rho, seed = 364378 + i)
-  }
-  mi <- scscale_empirical_mi(rna_sub, adt_counts, r = r_empirical, count_transform = count_transform)
-  data.frame(sampling_rate = rho, I_empirical = mi$mi, r_eff = mi$r_eff)
-}))
-
-n_replicates <- 2
-cell_orders <- lapply(seq_len(n_replicates), function(replicate) {
-  set.seed(264378 + replicate)
-  sample(colnames(rna_counts), max(n_grid))
-})
-
-cell_empirical_replicates <- do.call(rbind, lapply(seq_len(n_replicates), function(replicate) {
-  do.call(rbind, lapply(n_grid, function(n_i) {
-    cells <- cell_orders[[replicate]][seq_len(n_i)]
-    mi <- scscale_empirical_mi(
-      rna_counts[, cells, drop = FALSE],
-      adt_counts[, cells, drop = FALSE],
-      r = r_empirical,
-      count_transform = count_transform
-    )
-    data.frame(sampling_rate = 1, n = n_i, replicate = replicate, I_empirical = mi$mi, r_eff = mi$r_eff)
-  }))
-}))
-cell_empirical <- summarize_empirical(cell_empirical_replicates)
-
-cell_by_umi_empirical_replicates <- do.call(rbind, lapply(seq_along(rho_grid), function(rho_i) {
-  rho <- rho_grid[rho_i]
-  do.call(rbind, lapply(seq_len(n_replicates), function(replicate) {
-    do.call(rbind, lapply(n_grid, function(n_i) {
-      cells <- cell_orders[[replicate]][seq_len(n_i)]
-      rna_sub <- rna_counts[, cells, drop = FALSE]
-      if (rho < 1) {
-        rna_sub <- scscale_downsample_counts_fraction(
-          rna_sub,
-          fraction = rho,
-          seed = 464378 + rho_i * 100 + replicate * 10 + match(n_i, n_grid)
-        )
-      }
-      mi <- scscale_empirical_mi(
-        rna_sub,
-        adt_counts[, cells, drop = FALSE],
-        r = r_empirical,
-        count_transform = count_transform
-      )
-      data.frame(sampling_rate = rho, n = n_i, replicate = replicate, I_empirical = mi$mi, r_eff = mi$r_eff)
-    }))
-  }))
-}))
-cell_by_umi_empirical <- summarize_empirical(cell_by_umi_empirical_replicates)
+names(model$pair)       # Full-depth spike fits and RNA-ADT alignment
+model$umi$curve         # UMI-depth scaling
+model$cell              # Cell-number scaling
+model$joint             # Joint I(n,U) grid
 ```
 
-## Six Plots
+The fitted linear UMI parameters for every full-depth RNA spike are saved
+directly in the model:
 
-```{r six-panel-plots, fig.width=12, fig.height=12}
-draw_error_bars <- function(x, y, sd, col, length = 0.04) {
-  keep <- is.finite(x) & is.finite(y) & is.finite(sd) & sd > 1e-8
-  if (!any(keep)) return(invisible(NULL))
-  arrows(x[keep], y[keep] - sd[keep], x[keep], y[keep] + sd[keep],
-         angle = 90, code = 3, length = length, col = col)
-}
+```{r umi-parameters}
+model$parameters$q_fit_rate
+model$parameters$q_total_rate_fit
+```
 
-rho_cols <- setNames(
-  c("#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00"),
-  as.character(rho_grid)
+## UMI Scaling
+
+```{r plot-umi, fig.width=7, fig.height=5}
+plot(model, type = "umi")
+```
+
+## Cell-Number Scaling
+
+```{r plot-cell, fig.width=7, fig.height=5}
+plot(model, type = "cell")
+```
+
+## Joint Cell-Number by UMI Scaling
+
+Each colored line is one UMI sampling rate evaluated over the same absolute
+cell-number grid.
+
+```{r plot-joint, fig.width=8, fig.height=5.5}
+plot(model, type = "joint")
+```
+
+## Optional Controls
+
+The default call should be sufficient for the standard workflow. The sampled
+UMI depths and evaluated cell counts can still be overridden explicitly:
+
+```{r custom-grids, eval=FALSE}
+model_custom <- scscale(
+  X,
+  Y,
+  umi_sampling_rates = c(0.20, 0.40, 0.60, 0.80, 1.00),
+  n_grid = c(500, 1000, 2000, 4000),
+  seed = 164378
 )
-
-old_par <- par(mfrow = c(3, 2), mar = c(4.2, 4.3, 2.5, 1))
-
-plot(
-  umi_theory$curve$sampling_rate,
-  umi_theory$curve$I_theory,
-  type = "b",
-  pch = 16,
-  col = "#0072B2",
-  ylim = range(c(umi_theory$curve$I_theory, umi_theory$curve$I_infinity)),
-  xlab = expression("Sampling rate " * rho),
-  ylab = expression(I[theory]),
-  main = "UMI scaling: theory"
-)
-lines(umi_theory$curve$sampling_rate, umi_theory$curve$I_infinity, col = "grey35", lwd = 2, lty = 2)
-legend("bottomright", legend = c("refit rank", expression(I[infinity])),
-       col = c("#0072B2", "grey35"), pch = c(16, NA), lwd = c(1, 2),
-       lty = c(1, 2), bty = "n")
-
-plot(
-  umi_empirical$sampling_rate,
-  umi_empirical$I_empirical,
-  type = "b",
-  pch = 17,
-  col = "#D55E00",
-  xlab = expression("Sampling rate " * rho),
-  ylab = expression(I[empirical]),
-  main = "UMI scaling: empirical"
-)
-
-plot(
-  cell_theory$n,
-  cell_theory$I_theory,
-  type = "b",
-  pch = 16,
-  col = "#0072B2",
-  ylim = range(c(cell_theory$I_theory, pair$I_infinity)),
-  xlab = "Cell number n",
-  ylab = expression(I[theory]),
-  main = "Cell number scaling: theory"
-)
-abline(h = pair$I_infinity, col = "grey35", lwd = 2, lty = 2)
-legend("topright", legend = c("theory", expression(I[infinity])),
-       col = c("#0072B2", "grey35"), pch = c(16, NA), lwd = c(1, 2),
-       lty = c(1, 2), bty = "n")
-
-plot(
-  cell_empirical$n,
-  cell_empirical$I_empirical,
-  type = "b",
-  pch = 17,
-  col = "#D55E00",
-  xlab = "Cell number n",
-  ylab = expression(I[empirical]),
-  main = "Cell number scaling: empirical"
-)
-draw_error_bars(cell_empirical$n, cell_empirical$I_empirical, cell_empirical$I_empirical_sd, col = "#D55E00")
-
-plot(
-  NA,
-  xlim = range(n_grid),
-  ylim = range(cell_by_umi_theory$I_theory),
-  xlab = "Cell number n",
-  ylab = expression(I[theory](n, rho)),
-  main = "Cell number by UMI: theory"
-)
-for (rho in rho_grid) {
-  key <- as.character(rho)
-  df <- cell_by_umi_theory[cell_by_umi_theory$sampling_rate == rho, ]
-  df <- df[order(df$n), ]
-  lines(df$n, df$I_theory, col = rho_cols[key], lwd = 2)
-  points(df$n, df$I_theory, col = rho_cols[key], pch = 16)
-}
-legend("topright", legend = paste0("rho=", rho_grid), col = rho_cols, lwd = 2, pch = 16, bty = "n")
-
-plot(
-  NA,
-  xlim = range(n_grid),
-  ylim = range(cell_by_umi_empirical$I_empirical),
-  xlab = "Cell number n",
-  ylab = expression(I[empirical](n, rho)),
-  main = "Cell number by UMI: empirical"
-)
-for (rho in rho_grid) {
-  key <- as.character(rho)
-  emp <- cell_by_umi_empirical[cell_by_umi_empirical$sampling_rate == rho, ]
-  emp <- emp[order(emp$n), ]
-  lines(emp$n, emp$I_empirical, col = rho_cols[key], lwd = 2)
-  points(emp$n, emp$I_empirical, col = rho_cols[key], pch = 16)
-  draw_error_bars(emp$n, emp$I_empirical, emp$I_empirical_sd, col = rho_cols[key], length = 0.03)
-}
-legend("topright", legend = paste0("rho=", rho_grid), col = rho_cols, lwd = 2, pch = 16, bty = "n", cex = 0.85)
-
-par(old_par)
 ```
