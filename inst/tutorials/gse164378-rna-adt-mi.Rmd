@@ -9,7 +9,8 @@ ADT matrix has 228 antibody features.
 
 The main interface takes the two matched feature-by-cell count matrices and
 returns the full-depth fit, UMI scaling, cell-number scaling, and joint
-\(I(n,U)\) grid in one object.
+\(I(n,U)\) grid in one object. We then estimate the corresponding empirical
+MI grid directly from downsampled cells and counts.
 
 ```{r setup}
 library(scScale)
@@ -25,13 +26,17 @@ dim(Y)
 ## Fit Everything
 
 The default UMI grid is
-`c(0.10, 0.20, 0.35, 0.50, 0.70, 0.85, 1.00)`. The cell-number grid is
-generated automatically using absolute, log-spaced cell counts.
+`c(0.10, 0.20, 0.35, 0.50, 0.70, 0.85, 1.00)`. We use four absolute cell
+numbers so the direct empirical comparison remains quick enough for a
+tutorial.
 
 ```{r complete-fit}
+n_grid <- c(500, 1000, 2000, 4000)
+
 model <- scscale(
   X,
   Y,
+  n_grid = n_grid,
   seed = 164378
 )
 
@@ -57,25 +62,199 @@ model$parameters$q_fit_rate
 model$parameters$q_total_rate_fit
 ```
 
-## UMI Scaling
+## Empirical Comparison
 
-```{r plot-umi, fig.width=7, fig.height=5}
-plot(model, type = "umi")
+`scscale_empirical_inu_grid()` performs the direct comparison. At each
+\((n,U)\) grid point it samples cells, downsamples RNA counts, and measures the
+RNA-ADT subspace overlap without using the spike-model prediction.
+
+```{r empirical-grid}
+empirical_grid <- scscale_empirical_inu_grid(
+  X,
+  Y,
+  n_grid = n_grid,
+  sampling_rates = model$grids$umi_sampling_rates,
+  r = 12,
+  n_replicates = 2,
+  n_workers = 2,
+  seed = 264378
+)
+
+empirical_grid$n_requested <- round(
+  empirical_grid$cell_sampling_rate * ncol(X)
+)
+
+empirical_mean <- aggregate(
+  I_empirical ~ sampling_rate + n_requested,
+  data = empirical_grid,
+  FUN = mean
+)
+empirical_sd <- aggregate(
+  I_empirical ~ sampling_rate + n_requested,
+  data = empirical_grid,
+  FUN = stats::sd
+)
+names(empirical_sd)[names(empirical_sd) == "I_empirical"] <- "I_empirical_sd"
+empirical <- merge(
+  empirical_mean,
+  empirical_sd,
+  by = c("sampling_rate", "n_requested"),
+  sort = TRUE
+)
 ```
 
-## Cell-Number Scaling
+## Theory and Empirical Results Side by Side
 
-```{r plot-cell, fig.width=7, fig.height=5}
-plot(model, type = "cell")
-```
+Each row shows the same scaling experiment twice: spike-model theory on the
+left and direct empirical subspace MI on the right. Corresponding panels use
+the same y-axis range.
 
-## Joint Cell-Number by UMI Scaling
+```{r comparison-plots, fig.width=12, fig.height=12}
+draw_error_bars <- function(x, y, sd, col, length = 0.04) {
+  keep <- is.finite(x) & is.finite(y) & is.finite(sd) & sd > 1e-8
+  if (!any(keep)) return(invisible(NULL))
+  arrows(
+    x[keep],
+    y[keep] - sd[keep],
+    x[keep],
+    y[keep] + sd[keep],
+    angle = 90,
+    code = 3,
+    length = length,
+    col = col
+  )
+}
 
-Each colored line is one UMI sampling rate evaluated over the same absolute
-cell-number grid.
+rates <- sort(model$grids$umi_sampling_rates)
+rate_cols <- setNames(
+  grDevices::hcl.colors(length(rates), palette = "Dark 3"),
+  as.character(rates)
+)
 
-```{r plot-joint, fig.width=8, fig.height=5.5}
-plot(model, type = "joint")
+umi_empirical <- empirical[
+  empirical$n_requested == max(n_grid),
+  ,
+  drop = FALSE
+]
+cell_empirical <- empirical[
+  empirical$sampling_rate == 1,
+  ,
+  drop = FALSE
+]
+
+umi_ylim <- range(
+  model$umi$curve$I_theory,
+  model$umi$curve$I_infinity,
+  umi_empirical$I_empirical,
+  finite = TRUE
+)
+cell_ylim <- range(
+  model$cell$I_theory,
+  model$pair$I_infinity,
+  cell_empirical$I_empirical,
+  finite = TRUE
+)
+joint_ylim <- range(
+  model$joint$I_theory,
+  empirical$I_empirical,
+  finite = TRUE
+)
+
+old_par <- par(mfrow = c(3, 2), mar = c(4.2, 4.3, 2.5, 1))
+
+plot(
+  model,
+  type = "umi",
+  ylim = umi_ylim,
+  main = "UMI scaling: theory"
+)
+
+plot(
+  umi_empirical$sampling_rate,
+  umi_empirical$I_empirical,
+  type = "b",
+  pch = 17,
+  col = "#D55E00",
+  ylim = umi_ylim,
+  xlab = expression("UMI sampling rate " * rho),
+  ylab = expression(I[empirical]),
+  main = "UMI scaling: empirical"
+)
+draw_error_bars(
+  umi_empirical$sampling_rate,
+  umi_empirical$I_empirical,
+  umi_empirical$I_empirical_sd,
+  col = "#D55E00"
+)
+
+plot(
+  model,
+  type = "cell",
+  ylim = cell_ylim,
+  main = "Cell-number scaling: theory"
+)
+
+plot(
+  cell_empirical$n_requested,
+  cell_empirical$I_empirical,
+  type = "b",
+  pch = 17,
+  col = "#D55E00",
+  ylim = cell_ylim,
+  xlab = "Cell number n",
+  ylab = expression(I[empirical]),
+  main = "Cell-number scaling: empirical"
+)
+draw_error_bars(
+  cell_empirical$n_requested,
+  cell_empirical$I_empirical,
+  cell_empirical$I_empirical_sd,
+  col = "#D55E00"
+)
+
+plot(
+  model,
+  type = "joint",
+  ylim = joint_ylim,
+  main = expression("Joint " * I(n, U) * ": theory")
+)
+
+plot(
+  NA_real_,
+  xlim = range(n_grid),
+  ylim = joint_ylim,
+  xlab = "Cell number n",
+  ylab = expression(I[empirical](n, rho)),
+  main = expression("Joint " * I(n, U) * ": empirical")
+)
+for (rho in rates) {
+  curve <- empirical[
+    empirical$sampling_rate == rho,
+    ,
+    drop = FALSE
+  ]
+  curve <- curve[order(curve$n_requested), , drop = FALSE]
+  col <- rate_cols[[as.character(rho)]]
+  lines(curve$n_requested, curve$I_empirical, col = col, lwd = 2)
+  points(curve$n_requested, curve$I_empirical, col = col, pch = 16)
+  draw_error_bars(
+    curve$n_requested,
+    curve$I_empirical,
+    curve$I_empirical_sd,
+    col = col,
+    length = 0.03
+  )
+}
+legend(
+  "bottomright",
+  legend = paste0("rho=", rates),
+  col = rate_cols,
+  pch = 16,
+  lwd = 2,
+  bty = "n"
+)
+
+par(old_par)
 ```
 
 ## Optional Controls
