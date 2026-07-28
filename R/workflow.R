@@ -377,6 +377,7 @@ scscale <- function(
     mp_grid_n = mp_grid_n,
     use_irlba = use_irlba
   )
+  umi$fitted_curve <- scscale_fitted_umi_curve(pair, umi)
   cell <- scscale_cell_number_mi(pair, n_grid = n_grid)
   joint <- scscale_cell_number_by_umi_mi(
     pair,
@@ -424,6 +425,41 @@ print.scscale_model <- function(x, ...) {
   invisible(x)
 }
 
+scscale_fitted_umi_curve <- function(pair, umi, n_points = 200L) {
+  q_fit <- umi$q_fit_rate[order(umi$q_fit_rate$rank), , drop = FALSE]
+  rates <- seq(
+    min(umi$sampling_rates),
+    max(umi$sampling_rates),
+    length.out = as.integer(n_points)
+  )
+  theta_Y <- pair$y_fit$theta_X[seq_len(pair$r_Y)]
+  theta_Y_infinity <- pair$y_fit$theta_infinity[seq_len(pair$r_Y)]
+  P <- pair$P[
+    seq_len(min(nrow(pair$P), nrow(q_fit))),
+    seq_len(pair$r_Y),
+    drop = FALSE
+  ]
+
+  rows <- lapply(rates, function(rho) {
+    slope <- q_fit$q_rate_slope
+    slope[!is.finite(slope)] <- 0
+    q_X <- pmax(q_fit$q_rate_intercept + slope * rho, 0)
+    q_X <- q_X[seq_len(nrow(P))]
+    theta_X <- scscale_recoverability(q_X, c_X = pair$x_fit$c_X)
+    theta_X_infinity <- scscale_theta_infinity(q_X)
+    data.frame(
+      sampling_rate = rho,
+      I_theory = scscale_low_rank_mi(theta_X, theta_Y, P = P)$mi,
+      I_infinity = scscale_low_rank_mi(
+        theta_X_infinity,
+        theta_Y_infinity,
+        P = P
+      )$mi
+    )
+  })
+  do.call(rbind, rows)
+}
+
 plot.scscale_model <- function(
   x,
   type = c("umi", "cell", "joint"),
@@ -436,12 +472,13 @@ plot.scscale_model <- function(
   }
 
   if (type == "umi") {
-    curve <- x$umi$curve[order(x$umi$curve$sampling_rate), , drop = FALSE]
+    curve <- x$umi$fitted_curve %||% x$umi$curve
+    curve <- curve[order(curve$sampling_rate), , drop = FALSE]
     draw_plot(list(
       x = curve$sampling_rate,
       y = curve$I_theory,
-      type = "b",
-      pch = 16,
+      type = "l",
+      lwd = 2,
       col = "#0072B2",
       ylim = range(c(curve$I_theory, curve$I_infinity), finite = TRUE),
       xlab = expression("UMI sampling rate " * rho),
@@ -457,10 +494,9 @@ plot.scscale_model <- function(
     )
     graphics::legend(
       "bottomright",
-      legend = c("theory", expression(I[infinity])),
+      legend = c("fitted theory", expression(I[infinity])),
       col = c("#0072B2", "grey35"),
-      pch = c(16, NA),
-      lwd = c(1, 2),
+      lwd = c(2, 2),
       lty = c(1, 2),
       bty = "n"
     )

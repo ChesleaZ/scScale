@@ -18,9 +18,6 @@ data(gse164378_3p_citeseq_hvg)
 
 X <- gse164378_3p_citeseq_hvg$rna_counts
 Y <- gse164378_3p_citeseq_hvg$adt_counts
-
-dim(X)
-dim(Y)
 ```
 
 ## Fit Everything
@@ -39,28 +36,23 @@ model <- scscale(
   n_grid = n_grid,
   seed = 164378
 )
-
-model
 ```
 
-The complete result is organized into four main components:
+The fit summary is deliberately compact:
 
 ```{r inspect-fit}
-names(model)
-
-names(model$pair)       # Full-depth spike fits and RNA-ADT alignment
-model$umi$curve         # UMI-depth scaling
-model$cell              # Cell-number scaling
-model$joint             # Joint I(n,U) grid
+data.frame(
+  cells = model$pair$x_fit$n,
+  RNA_features = model$pair$x_fit$p,
+  ADT_features = model$pair$y_fit$p,
+  RNA_spikes = model$pair$r_X,
+  ADT_spikes = model$pair$r_Y
+)
 ```
 
-The fitted linear UMI parameters for every full-depth RNA spike are saved
-directly in the model:
-
-```{r umi-parameters}
-model$parameters$q_fit_rate
-model$parameters$q_total_rate_fit
-```
+The full results remain available in `model$pair`, `model$umi`, `model$cell`,
+and `model$joint`. Per-spike linear UMI parameters are stored in
+`model$parameters$q_fit_rate`.
 
 ## Empirical Comparison
 

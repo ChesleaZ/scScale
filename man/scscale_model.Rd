@@ -52,7 +52,8 @@ the joint theoretical mutual-information grid \eqn{I(n,U)} in one object.
 \value{
 An \code{scscale_model} object containing \code{pair}, \code{umi},
 \code{cell}, and \code{joint} results, along with the evaluated grids and
-consolidated parameter tables.
+consolidated parameter tables. The UMI result includes a dense
+\code{fitted_curve} reconstructed from the saved per-spike linear UMI fits.
 }
 \examples{
 data(gse164378_3p_citeseq_hvg)

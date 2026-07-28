@@ -4,6 +4,8 @@
   paired UMI-by-cell-number scaling workflow.
 - Added `plot.scscale_model()` for UMI, cell-number, and joint-grid scaling
   plots.
+- UMI plots now use a dense curve reconstructed from the fitted per-spike
+  linear UMI parameters instead of connecting raw depth refits.
 
 # scScale 0.0.2
 
