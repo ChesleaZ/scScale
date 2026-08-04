@@ -64,15 +64,6 @@
     code {
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     }
-    ul {
-      padding: 0;
-      margin: 28px 0 0;
-      list-style: none;
-      border-top: 1px solid var(--border);
-    }
-    li {
-      border-bottom: 1px solid var(--border);
-    }
     a {
       display: block;
       padding: 18px 0;
@@ -94,76 +85,65 @@
 <body>
   <main>
     <h1>scScale</h1>
-    <p>Gaussian-spike and direct empirical scaling laws for matched single-cell modalities, using low-rank subspace-alignment mutual information.</p>
+    <p>Fit empirical or spike-model scaling laws for matched single-cell modalities.</p>
 
+    <h2>Tutorials</h2>
     <div class="links">
+      <a href="tutorials/gse164378-empirical-scaling-fit.html">
+        Empirical Scaling Fit
+        <span>Fit cell-number, UMI-depth, and joint curves directly from sampled MI.</span>
+      </a>
+      <a href="tutorials/gse164378-scscale-fit.html">
+        Spike Model Fit
+        <span>Fit the Gaussian spike model and inspect its spectrum.</span>
+      </a>
+      <a href="tutorials/gse164378-umi-scaling.html">
+        UMI Scaling Fit
+        <span>Estimate and visualize RNA scaling across UMI depths.</span>
+      </a>
       <a href="tutorials/gse164378-rna-adt-mi.html">
-        Minimal RNA-ADT Tutorial
-        <span>UMI scaling, cell-number scaling, joint scaling, and empirical MI.</span>
-      </a>
-      <a href="scScale-manual.pdf">
-        Package Manual PDF
-        <span>Function reference for the current package API.</span>
-      </a>
-      <a href="https://github.com/ChesleaZ/scScale">
-        Source Code
-        <span>Install and inspect the package on GitHub.</span>
+        Spike vs Empirical Fit
+        <span>Compare UMI, cell-number, and joint MI scaling side by side.</span>
       </a>
     </div>
 
-    <h2>Core Workflow</h2>
+    <h2>Quick Tutorial: Empirical Fit</h2>
     <pre><code>library(scScale)
+data(gse164378_3p_citeseq_hvg)
+X &lt;- gse164378_3p_citeseq_hvg$rna_counts
+Y &lt;- gse164378_3p_citeseq_hvg$adt_counts
+n_grid &lt;- c(500, 1000, 2000, 4000)
+rates &lt;- c(0.25, 0.5, 0.75, 1)
 
-pair <- scscale_pair_fit(rna_counts, adt_counts)
-
-umi <- scscale_umi_mi(pair, rna_counts, sampling_rates = c(0.25, 0.5, 1))
-cells <- scscale_cell_number_mi(pair, n_grid = c(500, 1000, 2000, 4000))
-joint <- scscale_cell_number_by_umi_mi(pair, umi, n_grid = c(500, 1000, 2000, 4000))
-
-empirical <- scscale_empirical_mi(rna_counts, adt_counts)</code></pre>
-
-    <h2>Direct Empirical Scaling</h2>
-    <pre><code>fit <- scscale_empirical_scaling_fit(
-  rna_counts,
-  adt_counts,
-  n_grid = c(500, 1000, 2000, 4000),
-  U_grid = c(1000, 3000, 10000),
-  r = 10,
-  n_replicates = 3,
-  joint_mode = "hybrid"
+fit &lt;- scscale_empirical_scaling_fit(
+  X, Y,
+  n_grid = n_grid,
+  sampling_rates = rates,
+  r = 12
 )
 
-fit$joint_fit
-fit$ceiling</code></pre>
+umi &lt;- scscale_predict_empirical_umi(fit, sampling_rate = rates)
+cells &lt;- scscale_predict_empirical_cell(fit, n = n_grid)
+joint &lt;- scscale_predict_empirical_joint(fit, n = n_grid, sampling_rate = rates)</code></pre>
 
-    <h2>Tutorials</h2>
-    <p>Start with these tutorials for the public scScale workflow.</p>
-    <ul>
-      <li>
-        <a href="tutorials/gse164378-scscale-fit.html">
-          GSE164378 Gaussian Spike Fit
-          <span>RNA spike-model fit on the 4,000-cell CITE-seq example.</span>
-        </a>
-      </li>
-      <li>
-        <a href="tutorials/gse164378-umi-scaling.html">
-          GSE164378 UMI Scaling
-          <span>RNA UMI scaling on the matched CITE-seq example.</span>
-        </a>
-      </li>
-      <li>
-        <a href="tutorials/gse164378-rna-adt-mi.html">
-          GSE164378 RNA-ADT Mutual Information
-          <span>Minimal package workflow for theory and empirical MI scaling.</span>
-        </a>
-      </li>
-      <li>
-        <a href="tutorials/gse164378-empirical-scaling-fit.html">
-          GSE164378 Direct Empirical Scaling Fit
-          <span>Cell-number, UMI-depth, and joint empirical scaling fits.</span>
-        </a>
-      </li>
-    </ul>
+    <h2>Quick Tutorial: Spike Model</h2>
+    <pre><code>library(scScale)
+data(gse164378_3p_citeseq_hvg)
+X &lt;- gse164378_3p_citeseq_hvg$rna_counts
+Y &lt;- gse164378_3p_citeseq_hvg$adt_counts
+n_grid &lt;- c(500, 1000, 2000, 4000)
+rates &lt;- c(0.25, 0.5, 0.75, 1)
+
+fit &lt;- scscale_spike_fit(
+  X, Y,
+  umi_sampling_rates = rates,
+  x_rank = 12,
+  y_rank = 12
+)
+
+umi &lt;- scscale_umi_scaling(fit, sampling_rate = rates)
+cells &lt;- scscale_cell_scaling(fit, n = n_grid)
+joint &lt;- scscale_joint_scaling(fit, n = n_grid, sampling_rate = rates)</code></pre>
   </main>
 </body>
 </html>

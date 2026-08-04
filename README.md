@@ -62,10 +62,10 @@ pak::pak("ChesleaZ/scScale")
 The rendered tutorial and reference files are available on GitHub Pages:
 
 - [scScale tutorial index](https://chesleaz.github.io/scScale/)
-- [Package manual PDF](https://chesleaz.github.io/scScale/scScale-manual.pdf)
-- [GSE164378 RNA-ADT mutual information](https://chesleaz.github.io/scScale/tutorials/gse164378-rna-adt-mi.html)
-- [GSE164378 RNA UMI scaling](https://chesleaz.github.io/scScale/tutorials/gse164378-umi-scaling.html)
-- [GSE164378 Gaussian spike fit](https://chesleaz.github.io/scScale/tutorials/gse164378-scscale-fit.html)
+- [Empirical scaling fit](https://chesleaz.github.io/scScale/tutorials/gse164378-empirical-scaling-fit.html)
+- [Spike model fit](https://chesleaz.github.io/scScale/tutorials/gse164378-scscale-fit.html)
+- [UMI scaling fit](https://chesleaz.github.io/scScale/tutorials/gse164378-umi-scaling.html)
+- [Spike versus empirical fit](https://chesleaz.github.io/scScale/tutorials/gse164378-rna-adt-mi.html)
 
 The same examples are also installed with the package:
 
