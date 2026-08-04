@@ -1091,10 +1091,11 @@ scscale_plot_empirical_fit <- function(object, type = c("both", "cell", "umi"), 
     obs <- object$grid[abs(object$grid$U - object$reference$U_ref) < 1e-8, , drop = FALSE]
     obs <- scscale_empirical_summary(obs, by = "cell_sampling_rate")
     curve <- scscale_predict_empirical_cell(object, n_points = n_points)
+    I_infinity <- c(object$cell_fit$coefficients, object$cell_fit$fixed)[["I_infinity"]]
     graphics::plot(
       NA,
       xlim = range(obs$cell_sampling_rate),
-      ylim = range(c(obs$I_empirical - obs$I_sd, obs$I_empirical + obs$I_sd, curve$I_fit), na.rm = TRUE),
+      ylim = range(c(obs$I_empirical - obs$I_sd, obs$I_empirical + obs$I_sd, curve$I_fit, I_infinity), na.rm = TRUE),
       xlab = "Cell sampling rate",
       ylab = "Empirical MI",
       main = "Cell-number scaling",
@@ -1102,16 +1103,25 @@ scscale_plot_empirical_fit <- function(object, type = c("both", "cell", "umi"), 
     )
     scscale_draw_interval_bars(obs$cell_sampling_rate, obs$I_empirical, obs$I_sd, col = "#0072B2")
     graphics::lines(curve$cell_sampling_rate, curve$I_fit, col = "#D55E00", lwd = 2)
-    graphics::legend("bottomright", legend = c("empirical mean +/- sd", "fit"), col = c("#0072B2", "#D55E00"), lwd = c(1.6, 2), bty = "n")
+    graphics::abline(h = I_infinity, col = "grey35", lwd = 2, lty = 2)
+    graphics::legend(
+      "bottomright",
+      legend = expression("empirical mean +/- sd", "curve fit", I[infinity] ~ "upper bound"),
+      col = c("#0072B2", "#D55E00", "grey35"),
+      lwd = c(1.6, 2, 2),
+      lty = c(1, 1, 2),
+      bty = "n"
+    )
   }
   if (type %in% c("both", "umi")) {
     obs <- object$grid[object$grid$n == object$reference$n_ref, , drop = FALSE]
     obs <- scscale_empirical_summary(obs, by = c("sampling_rate", "U"))
     curve <- scscale_predict_empirical_umi(object, n_points = n_points)
+    I_infinity <- c(object$umi_fit$coefficients, object$umi_fit$fixed)[["I_infinity"]]
     graphics::plot(
       NA,
       xlim = range(obs$sampling_rate),
-      ylim = range(c(obs$I_empirical - obs$I_sd, obs$I_empirical + obs$I_sd, curve$I_fit), na.rm = TRUE),
+      ylim = range(c(obs$I_empirical - obs$I_sd, obs$I_empirical + obs$I_sd, curve$I_fit, I_infinity), na.rm = TRUE),
       xlab = "UMI sampling rate",
       ylab = "Empirical MI",
       main = "UMI scaling",
@@ -1119,7 +1129,15 @@ scscale_plot_empirical_fit <- function(object, type = c("both", "cell", "umi"), 
     )
     scscale_draw_interval_bars(obs$sampling_rate, obs$I_empirical, obs$I_sd, col = "#0072B2")
     graphics::lines(curve$sampling_rate, curve$I_fit, col = "#D55E00", lwd = 2)
-    graphics::legend("bottomright", legend = c("empirical mean +/- sd", "fit"), col = c("#0072B2", "#D55E00"), lwd = c(1.6, 2), bty = "n")
+    graphics::abline(h = I_infinity, col = "grey35", lwd = 2, lty = 2)
+    graphics::legend(
+      "bottomright",
+      legend = expression("empirical mean +/- sd", "curve fit", I[infinity] ~ "upper bound"),
+      col = c("#0072B2", "#D55E00", "grey35"),
+      lwd = c(1.6, 2, 2),
+      lty = c(1, 1, 2),
+      bty = "n"
+    )
   }
   invisible(object)
 }
@@ -1152,6 +1170,84 @@ scscale_plot_empirical_umi_levels <- function(object, sampling_rate = NULL, U = 
   }
   graphics::legend("bottomright", legend = paste0("rho = ", signif(umi$sampling_rate, 3)), col = cols, lwd = 2, bty = "n", cex = 0.85)
   invisible(object)
+}
+
+scscale_plot_empirical_surface <- function(
+  object,
+  n = NULL,
+  U = NULL,
+  n_points = 60,
+  U_points = 60,
+  show_points = TRUE,
+  theta = 35,
+  phi = 25,
+  expand = 0.65,
+  surface_col = "#56B4E9",
+  point_col = "#D55E00",
+  border = NA,
+  shade = 0.35,
+  ...
+) {
+  scscale_check_empirical_inu_fit(object)
+  if (is.null(n)) {
+    n <- seq(min(object$grid$n), max(object$grid$n), length.out = n_points)
+  }
+  if (is.null(U)) {
+    U <- seq(min(object$grid$U), max(object$grid$U), length.out = U_points)
+  }
+  n <- sort(unique(as.numeric(n)))
+  U <- sort(unique(as.numeric(U)))
+  if (length(n) < 2L || any(!is.finite(n) | n <= 0)) {
+    stop("n must contain at least two unique positive finite cell numbers.", call. = FALSE)
+  }
+  if (length(U) < 2L || any(!is.finite(U) | U <= 0)) {
+    stop("U must contain at least two unique positive finite UMI depths.", call. = FALSE)
+  }
+
+  surface <- expand.grid(n = n, U = U)
+  surface$I_fit <- stats::predict(object, surface)
+  z <- matrix(surface$I_fit, nrow = length(n), ncol = length(U))
+  z_values <- z
+  observed <- NULL
+  if (isTRUE(show_points)) {
+    observed <- scscale_empirical_summary(object$grid, by = c("n", "U"))
+    observed <- observed[
+      observed$n >= min(n) & observed$n <= max(n) &
+        observed$U >= min(U) & observed$U <= max(U),
+      ,
+      drop = FALSE
+    ]
+    z_values <- c(z_values, observed$I_empirical)
+  }
+
+  perspective <- graphics::persp(
+    x = n,
+    y = U,
+    z = z,
+    zlim = range(z_values, finite = TRUE),
+    theta = theta,
+    phi = phi,
+    expand = expand,
+    col = surface_col,
+    border = border,
+    shade = shade,
+    ticktype = "detailed",
+    xlab = "Cell number n",
+    ylab = "UMI depth U",
+    zlab = "Mutual information I(n,U)",
+    main = "Joint scaling surface",
+    ...
+  )
+  if (isTRUE(show_points) && nrow(observed)) {
+    projected <- grDevices::trans3d(
+      observed$n,
+      observed$U,
+      observed$I_empirical,
+      pmat = perspective
+    )
+    graphics::points(projected, pch = 19, col = point_col)
+  }
+  invisible(list(surface = surface, perspective = perspective, observed = observed))
 }
 
 predict.scscale_empirical_scaling_fit <- function(object, newdata = NULL, ...) {

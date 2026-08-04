@@ -84,7 +84,7 @@ scscale_subspace_overlap_matrix <- function(z_X, z_Y) {
   crossprod(q_X, q_Y)
 }
 
-scscale_umi_scaling <- function(
+scscale_umi_scaling_legacy <- function(
   counts,
   U_grid = NULL,
   sampling_rates = NULL,
@@ -177,9 +177,14 @@ scscale_umi_scaling <- function(
     X_ref <- prepared_ref$matrix
   }
 
-  r_eff <- min(as.integer(r), nrow(X_ref), ncol(X_ref))
+  r_eff <- min(
+    as.integer(r),
+    nrow(X_ref),
+    ncol(X_ref),
+    ncol(reference_fit$left_vectors)
+  )
   if (r_eff < 1L) stop("No reference spike directions are available.", call. = FALSE)
-  u_ref <- svd(X_ref, nu = r_eff, nv = 0)$u[, seq_len(r_eff), drop = FALSE]
+  u_ref <- reference_fit$left_vectors[, seq_len(r_eff), drop = FALSE]
   z_ref <- NULL
   if (isTRUE(empirical)) {
     z_ref <- right_singular_vectors(X_ref, r = r_eff, drop_first = FALSE, use_irlba = use_irlba)
@@ -209,23 +214,16 @@ scscale_umi_scaling <- function(
         center = center,
         scale = scale
       )
-      fit_U <- scscale_fit(
+      tau2_fixed <- scscale_fixed_residual_tau2(X_U, u_ref)
+      projected <- scscale_project_reference_spikes(
         X_U,
-        input = "normalized",
-        center = FALSE,
-        scale = FALSE,
-        r = r_eff,
-        mp_max_iter = mp_max_iter,
-        mp_grid_n = mp_grid_n,
-        fit_umi = FALSE
+        reference_vectors = u_ref,
+        tau2 = tau2_fixed
       )
-
-      projected <- crossprod(u_ref, X_U)
-      v <- rowSums(projected^2) / ncol(X_U)
-      delta <- pmax(v - fit_U$bulk$tau2, 0)
-      d2_X <- delta / fit_U$bulk$tau2
-      q_X <- fit_U$c_X * d2_X
-      theta_X <- scscale_recoverability(q_X, c_X = fit_U$c_X)
+      v <- projected$projected_variance
+      q_X <- projected$q_X
+      c_X <- nrow(X_U) / ncol(X_U)
+      theta_X <- scscale_recoverability(q_X, c_X = c_X)
       theta_X_infinity <- scscale_theta_infinity(q_X)
       I_theory <- scscale_low_rank_mi(theta_X, theta_Y, P = P)$mi
       I_infinity <- scscale_low_rank_mi(theta_X_infinity, theta_Y, P = P)$mi
@@ -247,8 +245,7 @@ scscale_umi_scaling <- function(
         replicate = replicate,
         rank = seq_len(r_eff),
         v = v,
-        tau2 = fit_U$bulk$tau2,
-        d2_X = d2_X,
+        tau2 = tau2_fixed,
         q_X = q_X,
         theta_X = theta_X,
         theta_X_infinity = theta_X_infinity,
@@ -256,9 +253,9 @@ scscale_umi_scaling <- function(
         I_infinity = I_infinity,
         I_empirical = I_empirical,
         gamma_empirical = gamma_empirical,
-        c_X = fit_U$c_X,
-        n = fit_U$n,
-        p = fit_U$p,
+        c_X = c_X,
+        n = ncol(X_U),
+        p = nrow(X_U),
         sampling_rate = sampling_rate,
         total_umi_expected = U,
         total_umi_observed = sum(counts_U)
@@ -504,19 +501,17 @@ scscale_linear_umi_scaling <- function(
   out
 }
 
-scscale_cell_scaling <- function(
-  d2_X,
+scscale_cell_scaling_legacy <- function(
+  q_X,
   p,
   n_grid,
   theta_Y,
   P = NULL,
-  eps = 1e-12,
-  parameter = c("q", "d2")
+  eps = 1e-12
 ) {
-  parameter <- match.arg(parameter)
-  if (inherits(d2_X, "scscale_fit")) {
-    fit <- d2_X
-    d2_X <- if (identical(parameter, "q")) fit$spikes$q_X else fit$spikes$d2_X
+  if (inherits(q_X, "scscale_fit")) {
+    fit <- q_X
+    q_X <- fit$spikes$q_X
     p <- p %||% fit$p
   }
   if (missing(p) || is.null(p)) stop("p is required.", call. = FALSE)
@@ -524,20 +519,12 @@ scscale_cell_scaling <- function(
 
   rows <- lapply(n_grid, function(n) {
     c_X <- p / n
-    if (identical(parameter, "q")) {
-      q_X <- d2_X
-      d2_n <- q_X / c_X
-    } else {
-      d2_n <- d2_X
-      q_X <- c_X * d2_n
-    }
     theta_X <- scscale_recoverability(q_X, c_X = c_X)
     data.frame(
       n = n,
       c_X = c_X,
       I_theory = scscale_low_rank_mi(theta_X, theta_Y, P = P, eps = eps)$mi,
       rank = seq_along(q_X),
-      d2_X = d2_n,
       q_X = q_X,
       theta_X = theta_X
     )

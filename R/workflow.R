@@ -142,9 +142,6 @@ scscale_target_fit <- function(
       eigenvalue = NA_real_,
       lambda_tilde = NA_real_,
       is_spike = TRUE,
-      d2_X = Inf,
-      d2 = Inf,
-      d = Inf,
       q_X = Inf,
       q = Inf,
       tau2 = NA_real_,
@@ -822,7 +819,7 @@ scscale_cell_number_mi <- function(
     stop("pair must be a scscale_pair_fit object.", call. = FALSE)
   }
   theta_Y <- pair$y_fit$theta_X[seq_len(pair$r_Y)]
-  out <- scscale_cell_scaling(q_X, p = pair$x_fit$p, n_grid = n_grid, theta_Y = theta_Y, P = P)
+  out <- scscale_cell_scaling_legacy(q_X, p = pair$x_fit$p, n_grid = n_grid, theta_Y = theta_Y, P = P)
   stats::aggregate(I_theory ~ n + c_X, data = out, FUN = unique)
 }
 

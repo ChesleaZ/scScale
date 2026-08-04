@@ -63,7 +63,7 @@ fit$bulk$history[, c(
 ```{r top-eigenvalues}
 head(
   fit$spikes[, c(
-    "rank", "lambda", "lambda_tilde", "is_spike", "d2_X", "q_X",
+    "rank", "lambda", "lambda_tilde", "is_spike", "q_X",
     "lambda_plus"
   )],
   30
@@ -154,4 +154,3 @@ abline(v = fit$bulk$selected_iteration, col = "#D55E00", lty = 2)
 
 par(old_par)
 ```
-

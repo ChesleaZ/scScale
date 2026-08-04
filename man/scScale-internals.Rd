@@ -6,7 +6,6 @@
 \alias{numeric_target_matrix}
 \alias{numeric_vector_empirical_mi}
 \alias{right_singular_vectors}
-\alias{scscale_cell_scaling}
 \alias{scscale_downsample_counts}
 \alias{scscale_downsample_counts_fraction}
 \alias{scscale_fit_mp_iterative}
@@ -18,7 +17,6 @@
 \alias{scscale_spike_table}
 \alias{scscale_target_mi}
 \alias{scscale_theta_infinity}
-\alias{scscale_umi_scaling}
 \alias{select_hvgs}
 \alias{subspace_overlap_mi}
 \title{Lower-Level scScale Helper Functions}
@@ -32,9 +30,6 @@ right_singular_vectors(x, r = 10, drop_first = FALSE, use_irlba = TRUE,
   maxit = 2000, work = NULL)
 
 subspace_overlap_mi(z1, z2, eps = 1e-12)
-
-scscale_cell_scaling(d2_X, p, n_grid, theta_Y, P = NULL, eps = 1e-12,
-  parameter = c("q", "d2"))
 
 scscale_downsample_counts(counts, U, seed = NULL)
 
@@ -70,12 +65,6 @@ scscale_spike_table(eigenvalues, bulk, r = NULL, force_spikes = FALSE)
 
 scscale_theta_infinity(q)
 
-scscale_umi_scaling(counts, U_grid = NULL, sampling_rates = NULL, r = 10,
-  target_depth = 1e4, count_transform = c("log1p_cpm",
-  "pearson_residual", "log1p"), center = TRUE, scale = FALSE,
-  n_features = NULL, min_cells = 10, seed = 1, n_replicates = 1,
-  theta_Y = NULL, P = NULL, reference_fit = NULL, empirical = TRUE,
-  use_irlba = TRUE, mp_max_iter = 300, mp_grid_n = 20000)
 }
 \arguments{
 \item{x, counts}{Feature-by-cell matrix or fitted object.}
@@ -84,8 +73,8 @@ scscale_umi_scaling(counts, U_grid = NULL, sampling_rates = NULL, r = 10,
 \item{eps}{Numerical clipping value.}
 \item{use_irlba, maxit, work, drop_first}{Singular-vector controls.}
 \item{center, scale, target_depth, count_transform, n_features, min_cells}{Preprocessing controls.}
-\item{d2_X, p, n_grid, theta_Y, P, q}{Spike and MI scaling quantities.}
-\item{U, fraction, seed, n_replicates}{Downsampling controls.}
+\item{q}{Spike and MI scaling quantities.}
+\item{U, fraction, seed}{Downsampling controls.}
 \item{eigenvalues, c_X, c_ratio, tau2, bulk}{MP bulk and spike-fit quantities.}
 \item{force_spikes}{Whether to force the retained top components to be treated
 as spikes.}
@@ -94,11 +83,6 @@ mp_sample_p, mp_sample_reps, mp_sample_seed, gap_z_threshold,
 quiet_z_threshold, quiet_run, background_skip, background_window,
 central_quantiles}{MP fitting controls.}
 \item{input, n}{Matrix input type and dimensions.}
-\item{U_grid, sampling_rates, empirical, mp_max_iter, mp_grid_n}{UMI scaling controls.}
-\item{parameter}{Whether cell-number scaling is parameterized by \code{q} or
-\code{d2}.}
-\item{reference_fit}{Optional fitted object used to fix features and reference
-directions for legacy UMI scaling.}
 }
 \value{
 Implementation-specific objects used by the exported API.

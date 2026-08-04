@@ -127,16 +127,16 @@ scscale_fit <- function(
         reference_U = umi_reference_U,
         intercept = umi_linear_intercept,
         slope = umi_linear_slope,
-        r = object$r,
+        r = sum(object$spikes$is_spike),
         theta_Y = if (is.null(target_fit)) NULL else target_fit$theta_X,
         clamp_rate = umi_clamp_rate
       )
     } else {
-      object$umi_scaling <- scscale_umi_scaling(
+      object$umi_scaling <- scscale_umi_scaling_legacy(
         x,
         U_grid = U_grid,
         sampling_rates = sampling_rates,
-        r = object$r,
+        r = sum(object$spikes$is_spike),
         target_depth = target_depth,
         count_transform = count_transform,
         center = center,
@@ -734,15 +734,14 @@ scscale_spike_table <- function(eigenvalues, bulk, r = NULL, force_spikes = FALS
   lambda_tilde <- ev / bulk$tau2
   term <- lambda_tilde - (1 + bulk$c_X)
   disc <- term^2 - 4 * bulk$c_X
-  d2 <- rep(0, length(ev))
+  q <- rep(0, length(ev))
   spike_index <- if (isTRUE(force_spikes) && !is.null(r)) {
     seq_len(min(as.integer(r), length(ev)))
   } else {
     bulk$spike_index
   }
   ok <- seq_along(ev) %in% spike_index & is.finite(disc) & disc >= 0
-  d2[ok] <- pmax((term[ok] + sqrt(disc[ok])) / (2 * bulk$c_X), 0)
-  q <- bulk$c_X * d2
+  q[ok] <- pmax((term[ok] + sqrt(disc[ok])) / 2, 0)
 
   out <- data.frame(
     rank = seq_along(ev),
@@ -750,9 +749,6 @@ scscale_spike_table <- function(eigenvalues, bulk, r = NULL, force_spikes = FALS
     eigenvalue = ev,
     lambda_tilde = lambda_tilde,
     is_spike = seq_along(ev) %in% spike_index,
-    d2_X = d2,
-    d2 = d2,
-    d = sqrt(d2),
     q_X = q,
     q = q,
     tau2 = bulk$tau2,
@@ -856,8 +852,6 @@ scscale_mi <- function(
     intermediate = list(
       q_X = fit$spikes$q_X[seq_len(r_X_use)],
       q_Y = target_fit$spikes$q_X[seq_len(r_Y_use)],
-      d2_X = fit$spikes$d2_X[seq_len(r_X_use)],
-      d2_Y = target_fit$spikes$d2_X[seq_len(r_Y_use)],
       theta_double = theta_double,
       theta_double_infinity = theta_double_infinity,
       sigma = base_details$sigma,
@@ -910,7 +904,7 @@ scscale_mi <- function(
   if (!is.null(n_grid)) {
     out$cell_scaling <- stats::aggregate(
       I_theory ~ n + c_X,
-      data = scscale_cell_scaling(
+      data = scscale_cell_scaling_legacy(
         fit$spikes$q_X[seq_len(r_X_use)],
         p = fit$p,
         n_grid = n_grid,
@@ -944,7 +938,7 @@ scscale_mi <- function(
         q_X <- q_df$q_X[seq_len(min(r_X_use, nrow(q_df)))]
         curve <- stats::aggregate(
           I_theory ~ n + c_X,
-          data = scscale_cell_scaling(q_X, p = fit$p, n_grid = n_grid, theta_Y = theta_Y, P = P, eps = eps),
+          data = scscale_cell_scaling_legacy(q_X, p = fit$p, n_grid = n_grid, theta_Y = theta_Y, P = P, eps = eps),
           FUN = unique
         )
         curve$sampling_rate <- rate

@@ -1,25 +1,22 @@
 # scScale
 
-`scScale` is a small R package for single-cell scaling-law analysis. It fits
-Gaussian spike models to count matrices and uses one low-rank subspace-alignment
-mutual information formula to study matched RNA/ADT modalities.
+`scScale` is a small R package for single-cell scaling-law analysis. It
+supports a calibrated Gaussian spike model and a separate direct empirical
+curve fit for matched RNA/ADT modalities.
 
-The main workflow is one call:
+The canonical spike workflow separates calibration from evaluation:
 
-- `scscale()` fits the matched modalities, UMI-depth scaling, cell-number
-  scaling, and the joint \(I(n,U)\) surface.
+- `scscale_spike_fit()` performs all data-dependent work once: X and Y
+  spike fitting, rank selection, observed subspace alignment, reference
+  deattenuation, fixed-reference projections at each UMI depth, and per-spike
+  zero-anchored ordinary least-squares \(q(U)=bU\) fitting.
+- `scscale_cell_scaling()` evaluates \(I(n,1)\) from the saved fit.
+- `scscale_umi_scaling()` evaluates \(I(n_{\mathrm{ref}},\rho)\).
+- `scscale_joint_scaling()` evaluates the joint \(I(n,\rho)\) grid.
 
-The lower-level functions used internally are:
-
-- `scscale_pair_fit()` fits the two modalities once and stores their aligned
-  low-rank subspaces.
-- `scscale_umi_mi()` refits the RNA spike model over UMI depth and computes the
-  refitted theory curve plus the `I_infinity` bound.
-- `scscale_cell_number_mi()` computes the cell-number scaling curve.
-- `scscale_cell_number_by_umi_mi()` computes the joint cell-number by UMI
-  scaling surface.
-- `scscale_empirical_mi()` gives the empirical comparison curve.
-- `scscale_low_rank_mi()` is the shared MI formula used by the theory helpers.
+All three scaling functions use the same stored \(q(U)\) depth trajectories
+and alignment parameters. Cell number enters only through
+\(c_X(n)=p_X/n\); the functions then compute \(\theta_X(n,U)\) and MI.
 
 ```r
 library(scScale)
@@ -28,16 +25,20 @@ data(gse164378_3p_citeseq_hvg)
 x <- gse164378_3p_citeseq_hvg$rna_counts
 y <- gse164378_3p_citeseq_hvg$adt_counts
 
-model <- scscale(x, y)
+fit <- scscale_spike_fit(x, y)
 
-model$pair
-model$umi
-model$cell
-model$joint
+fit$x$parameters
+fit$y$parameters
+fit$alignment$P
+fit$alignment$K
 
-plot(model, type = "umi")
-plot(model, type = "cell")
-plot(model, type = "joint")
+cell <- scscale_cell_scaling(fit, n = c(500, 1000, 2000, 4000))
+umi <- scscale_umi_scaling(fit, sampling_rate = seq(0.1, 1, length.out = 50))
+joint <- scscale_joint_scaling(
+  fit,
+  n = c(500, 1000, 2000, 4000),
+  sampling_rate = c(0.2, 0.5, 1)
+)
 ```
 
 ## Installation

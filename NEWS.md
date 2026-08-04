@@ -1,5 +1,27 @@
 # scScale 0.0.3
 
+- The canonical UMI calibration now constrains every component law to
+  `q_X,k(U) = b_k U`. Enforcing `q_X,k(0) = 0` removes the large positive
+  intercepts that previously kept recoverability nearly saturated at low
+  UMI depth.
+- Calibrated spike-model MI now deattenuates the observed reference PC
+  alignment before extrapolation. The fitted object stores the observed
+  overlap as `alignment$P` and the regularized calibration as `alignment$K`;
+  predictions apply state-specific recoverabilities to `K`, avoiding the
+  previous double attenuation at the reference dataset.
+- Changed the canonical UMI spike calibration to estimate
+  \(q_{X,k}(U)=[\widehat v_k(U)-\widehat\tau_X^2(U)]_+/
+  \widehat\tau_X^2(U)\) directly along fixed reference directions. The noise
+  estimate now comes from the fixed full-depth residual subspace, and the
+  package fits \(q_{X,k}(U)=b_kU\) by zero-anchored ordinary least squares.
+- Cell-number scaling is now a pure prediction: \(q_{X,k}(U)\) is independent
+  of \(n\), cell number enters only through \(c_X(n)=p_X/n\), and the package
+  then calculates \(\theta_X(n,U)\) and MI.
+- Added `scscale_spike_fit()` as the canonical complete spike-model
+  calibration, with stable reference directions, per-spike UMI parameters,
+  and one shared state evaluator.
+- Added fit-object interfaces for `scscale_cell_scaling()`,
+  `scscale_umi_scaling()`, and `scscale_joint_scaling()`.
 - Added `scscale()` as the single user-facing entry point for the complete
   paired UMI-by-cell-number scaling workflow.
 - Added `plot.scscale_model()` for UMI, cell-number, and joint-grid scaling

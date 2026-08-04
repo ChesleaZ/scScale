@@ -5,6 +5,7 @@
 \alias{scscale_predict_empirical_umi}
 \alias{scscale_predict_empirical_joint}
 \alias{scscale_plot_empirical_fit}
+\alias{scscale_plot_empirical_surface}
 \alias{scscale_plot_empirical_umi_levels}
 \alias{scscale_empirical_inu_grid_corrected}
 \title{Inspect, Predict, and Plot Direct Empirical Scaling Fits}
@@ -27,6 +28,11 @@ scscale_plot_empirical_fit(object, type = c("both", "cell", "umi"),
 
 scscale_plot_empirical_umi_levels(object, sampling_rate = NULL, U = NULL,
   n_points = 300, ...)
+
+scscale_plot_empirical_surface(object, n = NULL, U = NULL, n_points = 60,
+  U_points = 60, show_points = TRUE, theta = 35, phi = 25,
+  expand = 0.65, surface_col = "#56B4E9", point_col = "#D55E00",
+  border = NA, shade = 0.35, ...)
 
 scscale_empirical_inu_grid_corrected(x, target, batch = NULL, n_grid = NULL,
   cell_sampling_rates = c(0.125, 0.1875, 0.25, 0.375, 0.50, 0.75,
@@ -64,16 +70,22 @@ samples at each grid point.}
 \item{cell_sampling_rate, sampling_rate}{Cell-number and UMI sampling rates.}
 \item{n, U}{Absolute cell numbers and UMI depths. Provide rates or absolute
 values, not both.}
-\item{n_points, cell_points, umi_points}{Number of points used when generating
-regular prediction curves.}
+\item{n_points, U_points, cell_points, umi_points}{Number of points used when
+generating regular prediction curves or the joint surface.}
 \item{type}{Which marginal fit to plot.}
+\item{show_points}{Whether to overlay the empirical grid means on the fitted
+surface.}
+\item{theta, phi, expand, surface_col, point_col, border, shade}{Graphical
+controls passed to or used with \code{\link[graphics]{persp}}.}
 \item{...}{Additional arguments passed to base \code{\link[graphics]{plot}}.}
 }
 \description{
 Convenience helpers for working with a fitted direct empirical scaling object.
 They expose the sampled empirical MI values, fitted parameters, marginal
 predictions, joint predictions over the full cell-by-UMI combination, and base R
-diagnostic plots. \code{scscale_empirical_inu_grid_corrected()} is the staged
+diagnostic plots, including a perspective surface of fitted mutual information
+over absolute cell number and UMI depth.
+\code{scscale_empirical_inu_grid_corrected()} is the staged
 batch-aware grid engine used by \code{scscale_empirical_scaling_fit()} when
 correction is requested: it UMI-thins the full raw matrix, applies a correction
 function once per UMI level/replicate, and then computes MI over replicated cell
@@ -83,8 +95,10 @@ subsamples from the corrected representation.
 \code{scscale_empirical_values()} returns a data frame of empirical grid values
 and fitted joint predictions. \code{scscale_empirical_parameters()} returns a
 data frame of fitted parameters and ceiling diagnostics. Prediction helpers
-return data frames with inputs and \code{I_fit}. Plot helpers return
-\code{object} invisibly. \code{scscale_empirical_inu_grid_corrected()} returns
+return data frames with inputs and \code{I_fit}. The marginal plot helpers
+return \code{object} invisibly. \code{scscale_plot_empirical_surface()} returns
+the prediction grid, perspective transformation matrix, and displayed
+observations invisibly. \code{scscale_empirical_inu_grid_corrected()} returns
 an empirical MI grid data frame.
 }
 \keyword{models}

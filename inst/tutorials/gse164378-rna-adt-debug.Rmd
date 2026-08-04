@@ -8,8 +8,9 @@ This is a debug page, not a tutorial. It keeps the setup deliberately raw:
 - use the full 4,000-cell RNA fit only to define fixed RNA feature directions;
 - sample nested cell sets, so each smaller `n` is contained in larger `n`;
 - stratify by RNA molecule sampling rate `rho`;
-- for each `(rho, n)`, compute variance along the fixed directions, `d_X^2`,
-  `q_X`, `theta_X`, and RNA-to-ADT `I`.
+- for each `(rho, n)`, compute fixed-residual noise, `q_X`, `theta_X`, and
+  RNA-to-ADT `I`. This is a diagnostic; the fitted cell-number law itself does
+  not subsample cells.
 
 ```{r setup}
 library(scScale)
@@ -58,8 +59,17 @@ r <- max(1L, min(
   length(rna_fit$theta_X),
   length(adt_fit$theta_X)
 ))
-u_ref <- svd(rna_fit$matrix, nu = r, nv = 0)$u[, seq_len(r), drop = FALSE]
+u_residual <- rna_fit$left_vectors[
+  ,
+  seq_len(sum(rna_fit$spikes$is_spike)),
+  drop = FALSE
+]
+u_ref <- u_residual[, seq_len(r), drop = FALSE]
 theta_Y <- adt_fit$theta_X[seq_len(r)]
+fixed_residual_tau2 <- getFromNamespace(
+  "scscale_fixed_residual_tau2",
+  "scScale"
+)
 
 data.frame(
   modality = c("RNA", "ADT"),
@@ -102,22 +112,11 @@ for (rho in rho_grid) {
       center = TRUE,
       scale = FALSE
     )
-    fit_sub <- scscale_fit(
-      X_sub,
-      input = "normalized",
-      center = FALSE,
-      scale = FALSE,
-      r = r,
-      fit_umi = FALSE,
-      mp_max_iter = 300,
-      mp_grid_n = 1200
-    )
-
     projected <- crossprod(u_ref, X_sub)
     v_fixed <- rowSums(projected^2) / ncol(X_sub)
-    d2_X <- pmax(v_fixed - fit_sub$bulk$tau2, 0) / fit_sub$bulk$tau2
+    tau2_fixed <- fixed_residual_tau2(X_sub, u_residual)
+    q_X <- pmax(v_fixed - tau2_fixed, 0) / tau2_fixed
     c_X <- nrow(X_sub) / ncol(X_sub)
-    q_X <- c_X * d2_X
     theta_X <- scscale_recoverability(q_X, c_X = c_X)
     I <- scscale_low_rank_mi(theta_X, theta_Y)$mi
 
@@ -127,13 +126,10 @@ for (rho in rho_grid) {
       p = nrow(X_sub),
       c_X = c_X,
       total_umi_observed = sum(rna_sub),
-      tau2 = fit_sub$bulk$tau2,
-      lambda_plus = fit_sub$bulk$lambda_plus,
-      selected_iteration = fit_sub$bulk$selected_iteration,
+      tau2 = tau2_fixed,
       I = I,
       rank = seq_len(r),
       v_fixed = v_fixed,
-      d2_X = d2_X,
       q_X = q_X,
       theta_X = theta_X
     )
@@ -143,7 +139,7 @@ for (rho in rho_grid) {
 debug_grid <- do.call(rbind, rows)
 debug_summary <- unique(debug_grid[, c(
   "sampling_rate", "n", "p", "c_X", "total_umi_observed",
-  "tau2", "lambda_plus", "selected_iteration", "I"
+  "tau2", "I"
 )])
 
 debug_summary
@@ -201,7 +197,6 @@ plot_quantity <- function(y, ylab, main_prefix) {
 }
 
 plot_quantity("v_fixed", expression(v[X*k]), "Fixed-direction variance")
-plot_quantity("d2_X", expression(hat(d)[X*k]^2), "d2")
 plot_quantity("q_X", expression(q[X*k]), "q")
 plot_quantity("theta_X", expression(theta[X*k]), "theta")
 ```

@@ -1,40 +1,43 @@
 ---
-title: "Spike Model Versus Direct Scaling Fit With GSE164378"
+title: "Spike Model Fit Versus Empirical Model Fit With GSE164378"
 output: html_document
 ---
 
 This tutorial compares two ways to model RNA-ADT mutual-information scaling:
 
-1. `scscale()` derives \(I(n,U)\) from the fitted Gaussian spikes.
-2. `scscale_empirical_scaling_fit()` fits a scaling law directly to sampled
-   empirical MI values.
+1. Fit a spike model with `scscale_spike_fit()`.
+2. Fit empirical scaling curves with `scscale_empirical_scaling_fit()`.
 
-Both methods use the same RNA, ADT, cell-number, and UMI-depth ranges.
+The two fits below use the same RNA, ADT, cell-number, and UMI-depth ranges.
 
 ```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
 library(scScale)
 data(gse164378_3p_citeseq_hvg)
 
 X <- gse164378_3p_citeseq_hvg$rna_counts
 Y <- gse164378_3p_citeseq_hvg$adt_counts
 n_grid <- c(500, 1000, 2000, 4000)
+rates <- c(0.10, 0.20, 0.35, 0.50, 0.70, 0.85, 1.00)
 ```
 
 ## Fit the Two Models
 
-```{r fit-models}
-spike_model <- scscale(
+```{r fit-models, results='hide'}
+spike_fit <- scscale_spike_fit(
   X,
   Y,
-  n_grid = n_grid,
+  umi_sampling_rates = rates,
+  x_rank = 12,
+  y_rank = 12,
   seed = 164378
 )
 
-direct_model <- scscale_empirical_scaling_fit(
+empirical_fit <- scscale_empirical_scaling_fit(
   X,
   Y,
   n_grid = n_grid,
-  sampling_rates = spike_model$grids$umi_sampling_rates,
+  sampling_rates = rates,
   r = 12,
   cell_replicates = 2,
   n_workers = 2,
@@ -43,228 +46,107 @@ direct_model <- scscale_empirical_scaling_fit(
 )
 ```
 
-The spike model uses the MP/BBP spectral fit. The direct model samples cells
-and counts, measures empirical subspace MI, and fits smooth marginal and joint
-scaling laws to those measurements.
-
 ```{r prepare-comparison, results='hide'}
-empirical <- scscale_empirical_values(direct_model, summarize = TRUE)
-empirical$n <- empirical$cell_sampling_rate * direct_model$sampling$n_total
+empirical <- scscale_empirical_values(empirical_fit, summarize = TRUE)
+empirical$n <- empirical$cell_sampling_rate * empirical_fit$sampling$n_total
 
-rates <- sort(spike_model$grids$umi_sampling_rates)
 rate_dense <- seq(min(rates), max(rates), length.out = 200)
 n_dense <- seq(min(n_grid), max(n_grid), length.out = 200)
 
-direct_umi <- scscale_predict_empirical_umi(
-  direct_model,
+spike_umi <- scscale_umi_scaling(
+  spike_fit,
   sampling_rate = rate_dense
 )
-direct_cell <- scscale_predict_empirical_cell(
-  direct_model,
+spike_cell <- scscale_cell_scaling(
+  spike_fit,
   n = n_dense
 )
-direct_joint <- scscale_predict_empirical_joint(
-  direct_model,
+spike_joint <- scscale_joint_scaling(
+  spike_fit,
   n = n_dense,
   sampling_rate = rates
+)
+
+empirical_umi <- scscale_predict_empirical_umi(
+  empirical_fit,
+  sampling_rate = rate_dense
+)
+empirical_cell <- scscale_predict_empirical_cell(
+  empirical_fit,
+  n = n_dense
+)
+empirical_joint <- scscale_predict_empirical_joint(
+  empirical_fit,
+  n = n_dense,
+  sampling_rate = rates
+)
+empirical_joint_parameters <- c(
+  empirical_fit$joint_fit$coefficients,
+  empirical_fit$joint_fit$fixed
+)
+empirical_I_infinity <- unname(
+  empirical_joint_parameters[["I_infinity"]]
 )
 ```
 
 ## Model Comparison
 
-The same empirical measurements are overlaid in both columns. The left column
-shows the spike model; the right column shows the direct scaling-law fit.
+The spike-model fits are shown on the left and the empirical curve fits on the
+right. Dashed lines show the corresponding shared \(I_\infty\) estimates.
 
 ```{r comparison-plots, fig.width=12, fig.height=12}
-draw_error_bars <- function(x, y, sd, col, length = 0.04) {
-  keep <- is.finite(x) & is.finite(y) & is.finite(sd) & sd > 1e-8
-  if (!any(keep)) return(invisible(NULL))
-  arrows(
-    x[keep],
-    y[keep] - sd[keep],
-    x[keep],
-    y[keep] + sd[keep],
-    angle = 90,
-    code = 3,
-    length = length,
-    col = col
-  )
+plot_curve <- function(fit, x, y, ceiling, title, xlab, ylim, observed = NULL) {
+  plot(fit[[x]], fit[[y]], type = "l", lwd = 2, col = "#0072B2",
+       xlab = xlab, ylab = "MI", main = title, ylim = ylim)
+  abline(h = ceiling, lty = 2, col = "grey35", lwd = 2)
+  if (!is.null(observed)) {
+    keep <- is.finite(observed$I_sd) & observed$I_sd > 0
+    segments(observed[[x]][keep], observed$I_empirical[keep] - observed$I_sd[keep],
+             observed[[x]][keep], observed$I_empirical[keep] + observed$I_sd[keep],
+             col = "#D55E00")
+    points(observed[[x]], observed$I_empirical, pch = 16, col = "#D55E00")
+  }
 }
 
-add_empirical <- function(x, y, sd, col = "#D55E00", pch = 17) {
-  points(x, y, pch = pch, col = col)
-  draw_error_bars(x, y, sd, col = col)
+plot_joint <- function(fit, y, title, ylim, observed = NULL) {
+  cols <- setNames(hcl.colors(length(rates), "Dark 3"), rates)
+  plot(NA, xlim = range(n_grid), ylim = ylim, xlab = "Cell number n",
+       ylab = "MI", main = title)
+  for (rho in rates) {
+    z <- fit[fit$sampling_rate == rho, ]
+    lines(z$n, z[[y]], col = cols[as.character(rho)], lwd = 2)
+  }
+  if (!is.null(observed)) {
+    point_cols <- cols[as.character(observed$sampling_rate)]
+    keep <- is.finite(observed$I_sd) & observed$I_sd > 0
+    segments(observed$n[keep], observed$I_empirical[keep] - observed$I_sd[keep],
+             observed$n[keep], observed$I_empirical[keep] + observed$I_sd[keep],
+             col = point_cols[keep])
+    points(observed$n, observed$I_empirical, pch = 1,
+           col = point_cols)
+  }
+  legend("bottomright", paste0("rho=", rates), col = cols, lwd = 2, bty = "n")
 }
 
-rate_cols <- setNames(
-  grDevices::hcl.colors(length(rates), palette = "Dark 3"),
-  as.character(rates)
-)
-
-umi_empirical <- empirical[
-  empirical$cell_sampling_rate == max(empirical$cell_sampling_rate),
-  ,
-  drop = FALSE
-]
-cell_empirical <- empirical[
-  empirical$sampling_rate == max(empirical$sampling_rate),
-  ,
-  drop = FALSE
-]
-
-umi_ylim <- range(
-  spike_model$umi$fitted_curve$I_theory,
-  spike_model$umi$fitted_curve$I_infinity,
-  direct_umi$I_fit,
-  umi_empirical$I_empirical,
-  finite = TRUE
-)
-cell_ylim <- range(
-  spike_model$cell$I_theory,
-  spike_model$pair$I_infinity,
-  direct_cell$I_fit,
-  cell_empirical$I_empirical,
-  finite = TRUE
-)
-joint_ylim <- range(
-  spike_model$joint$I_theory,
-  direct_joint$I_fit,
-  empirical$I_empirical,
-  finite = TRUE
-)
+umi_observed <- subset(empirical, cell_sampling_rate == max(cell_sampling_rate))
+cell_observed <- subset(empirical, sampling_rate == max(sampling_rate))
+umi_ylim <- range(spike_umi$I_theory, spike_fit$I_infinity,
+                  empirical_umi$I_fit, empirical_I_infinity, finite = TRUE)
+cell_ylim <- range(spike_cell$I_theory, spike_fit$I_infinity,
+                   empirical_cell$I_fit, empirical_I_infinity, finite = TRUE)
+joint_ylim <- range(spike_joint$I_theory, empirical_joint$I_fit, finite = TRUE)
 
 old_par <- par(mfrow = c(3, 2), mar = c(4.2, 4.3, 2.5, 1))
-
-plot(
-  spike_model,
-  type = "umi",
-  ylim = umi_ylim,
-  main = "UMI: spike model"
-)
-add_empirical(
-  umi_empirical$sampling_rate,
-  umi_empirical$I_empirical,
-  umi_empirical$I_sd
-)
-
-plot(
-  direct_umi$sampling_rate,
-  direct_umi$I_fit,
-  type = "l",
-  lwd = 2,
-  col = "#CC79A7",
-  ylim = umi_ylim,
-  xlab = expression("UMI sampling rate " * rho),
-  ylab = expression(I),
-  main = "UMI: direct scaling fit"
-)
-add_empirical(
-  umi_empirical$sampling_rate,
-  umi_empirical$I_empirical,
-  umi_empirical$I_sd
-)
-legend(
-  "bottomright",
-  legend = c("direct fit", "empirical"),
-  col = c("#CC79A7", "#D55E00"),
-  lwd = c(2, NA),
-  pch = c(NA, 17),
-  bty = "n"
-)
-
-plot(
-  spike_model,
-  type = "cell",
-  ylim = cell_ylim,
-  main = "Cell number: spike model"
-)
-add_empirical(
-  cell_empirical$n,
-  cell_empirical$I_empirical,
-  cell_empirical$I_sd
-)
-
-plot(
-  direct_cell$n,
-  direct_cell$I_fit,
-  type = "l",
-  lwd = 2,
-  col = "#CC79A7",
-  ylim = cell_ylim,
-  xlab = "Cell number n",
-  ylab = expression(I),
-  main = "Cell number: direct scaling fit"
-)
-add_empirical(
-  cell_empirical$n,
-  cell_empirical$I_empirical,
-  cell_empirical$I_sd
-)
-legend(
-  "bottomright",
-  legend = c("direct fit", "empirical"),
-  col = c("#CC79A7", "#D55E00"),
-  lwd = c(2, NA),
-  pch = c(NA, 17),
-  bty = "n"
-)
-
-plot(
-  spike_model,
-  type = "joint",
-  ylim = joint_ylim,
-  main = expression("Joint " * I(n, U) * ": spike model")
-)
-for (rho in rates) {
-  observed <- empirical[empirical$sampling_rate == rho, , drop = FALSE]
-  col <- rate_cols[[as.character(rho)]]
-  points(observed$n, observed$I_empirical, pch = 1, col = col)
-  draw_error_bars(
-    observed$n,
-    observed$I_empirical,
-    observed$I_sd,
-    col = col,
-    length = 0.03
-  )
-}
-
-plot(
-  NA_real_,
-  xlim = range(n_grid),
-  ylim = joint_ylim,
-  xlab = "Cell number n",
-  ylab = expression(I(n, rho)),
-  main = expression("Joint " * I(n, U) * ": direct scaling fit")
-)
-for (rho in rates) {
-  fitted <- direct_joint[
-    direct_joint$sampling_rate == rho,
-    ,
-    drop = FALSE
-  ]
-  observed <- empirical[
-    empirical$sampling_rate == rho,
-    ,
-    drop = FALSE
-  ]
-  col <- rate_cols[[as.character(rho)]]
-  lines(fitted$n, fitted$I_fit, col = col, lwd = 2)
-  points(observed$n, observed$I_empirical, pch = 1, col = col)
-  draw_error_bars(
-    observed$n,
-    observed$I_empirical,
-    observed$I_sd,
-    col = col,
-    length = 0.03
-  )
-}
-legend(
-  "bottomright",
-  legend = paste0("rho=", rates),
-  col = rate_cols,
-  lwd = 2,
-  bty = "n"
-)
-
+plot_curve(spike_umi, "sampling_rate", "I_theory", spike_fit$I_infinity,
+           "UMI: spike model", "UMI sampling rate", umi_ylim)
+plot_curve(empirical_umi, "sampling_rate", "I_fit", empirical_I_infinity,
+           "UMI: empirical model fit", "UMI sampling rate", umi_ylim, umi_observed)
+plot_curve(spike_cell, "n", "I_theory", spike_fit$I_infinity,
+           "Cell number: spike model", "Cell number n", cell_ylim)
+plot_curve(empirical_cell, "n", "I_fit", empirical_I_infinity,
+           "Cell number: empirical model fit", "Cell number n", cell_ylim, cell_observed)
+plot_joint(spike_joint, "I_theory", "Joint: spike model", joint_ylim)
+plot_joint(empirical_joint, "I_fit", "Joint: empirical model fit",
+           joint_ylim, empirical)
 par(old_par)
 ```
