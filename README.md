@@ -41,6 +41,41 @@ joint <- scscale_joint_scaling(
 )
 ```
 
+## External representations
+
+PCA and pretrained embeddings use the same downstream scaling-law code. PCA
+is an adapter from count matrices; external methods supply cell-by-dimension
+matrices with cell IDs as row names.
+
+```r
+representation <- scscale_representation(
+  reference = embedding_full,
+  umi = embedding_by_umi,
+  umi_values = median_umi,
+  name = "scVI",
+  rank = 10,
+  rmt_dimension = 36601
+)
+
+umi_fit <- scscale_representation_umi_fit(
+  representation,
+  target = adt_counts,
+  target_rank = 12
+)
+
+cell_fit <- scscale_representation_cell_fit(
+  umi_fit,
+  cell_numbers = c(250, 500, 1000, 2000, 4000),
+  replicates = 50,
+  evaluation_cells = 5000
+)
+```
+
+The matching PCA entry point is `scscale_pca_representation()`. It selects
+HVGs once from the reference counts and returns the same representation
+object, so both routes share empirical MI, UMI fitting, held-out CCA, and cell
+calibration.
+
 ## Installation
 
 Install the GitHub version with `remotes`:

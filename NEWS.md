@@ -54,3 +54,9 @@
   fitted R-squared, number of sampled rates, and number of detected rates.
 - Added `q_X_rate_hat` to the long table and total-spike summaries in `q_total`
   and `q_total_rate_fit`.
+# scScale 0.0.5
+
+- Added a common representation API for external embeddings and the standard
+  PCA preprocessing path.
+- Added UMI-anchored and held-out cell-number fitting wrappers that share the
+  same empirical MI and effective-model plumbing.
