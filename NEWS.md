@@ -1,5 +1,23 @@
-# scScale 0.0.3
+# scScale 0.0.4
 
+- `scscale_effective_fit()` now constrains `I_infinity` to at most twice the
+  maximum empirical MI by default. Fits reaching this ceiling retain their
+  observed-range curve but set `I_infinity_identified = FALSE`, record the
+  upper boundary, and emit an explicit warning. Set
+  `I_infinity_max_factor = Inf` to disable this safeguard.
+- The UMI-anchored effective model now applies a parameter-free shifted
+  softplus to the linear signal, keeping it strictly above `sqrt(d / n)`,
+  before evaluating the original RMT recoverability. This removes the
+  residual threshold transition while retaining the linear strong-signal
+  limit. The UMI-anchored cell-number law holds
+  those fitted UMI parameters fixed and estimates only its scale \(\gamma\),
+  without applying a BBP indicator or an additional gate to the correction.
+  Its fixed reference level is now the empirical MI at \((n_0,U_0)\), rather
+  than the possibly biased theoretical UMI-fit value; this anchor is observed
+  and therefore does not add a fitted parameter.
+- `scscale_empirical_mi()` and `scscale_empirical_inu_grid()` now accept
+  separate `x_rank` and `y_rank` values for matrix--matrix MI while retaining
+  `r` as the backward-compatible shared-rank default.
 - The canonical UMI calibration now constrains every component law to
   `q_X,k(U) = b_k U`. Enforcing `q_X,k(0) = 0` removes the large positive
   intercepts that previously kept recoverability nearly saturated at low

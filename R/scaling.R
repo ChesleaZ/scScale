@@ -179,7 +179,7 @@ scscale_umi_scaling_legacy <- function(
 
   r_eff <- min(
     as.integer(r),
-    nrow(X_ref),
+    nrow(X_ref) - 1L,
     ncol(X_ref),
     ncol(reference_fit$left_vectors)
   )

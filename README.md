@@ -62,6 +62,7 @@ pak::pak("ChesleaZ/scScale")
 The rendered tutorial and reference files are available on GitHub Pages:
 
 - [scScale tutorial index](https://chesleaz.github.io/scScale/)
+- [UMI-anchored effective fit](https://chesleaz.github.io/scScale/tutorials/gse164378-effective-scaling-fit.html)
 - [Empirical scaling fit](https://chesleaz.github.io/scScale/tutorials/gse164378-empirical-scaling-fit.html)
 - [Spike model fit](https://chesleaz.github.io/scScale/tutorials/gse164378-scscale-fit.html)
 - [UMI scaling fit](https://chesleaz.github.io/scScale/tutorials/gse164378-umi-scaling.html)

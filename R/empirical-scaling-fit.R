@@ -550,7 +550,9 @@ scscale_empirical_inu_grid <- function(
   center = TRUE,
   scale = FALSE,
   eps = 1e-12,
-  use_irlba = TRUE
+  use_irlba = TRUE,
+  x_rank = NULL,
+  y_rank = NULL
 ) {
   input <- match.arg(input)
   target_input <- match.arg(target_input, choices = c("counts", "normalized"))
@@ -659,7 +661,9 @@ scscale_empirical_inu_grid <- function(
       scale = scale,
       eps = eps,
       use_irlba = use_irlba,
-      store_subspaces = FALSE
+      store_subspaces = FALSE,
+      x_rank = x_rank,
+      y_rank = y_rank
     )
     data.frame(
       n = ncol(x_view),
@@ -671,6 +675,8 @@ scscale_empirical_inu_grid <- function(
       umi_replicate = 1L,
       I_empirical = mi$mi,
       r = r,
+      x_rank = mi$x_rank,
+      y_rank = mi$y_rank,
       r_eff = if (is.null(mi$r_eff)) NA_integer_ else mi$r_eff,
       actual_median_umi_per_cell = if (input == "counts") stats::median(colSums(x_view)) else NA_real_,
       actual_mean_umi_per_cell = if (input == "counts") mean(colSums(x_view)) else NA_real_,

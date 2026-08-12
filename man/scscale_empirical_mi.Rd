@@ -5,12 +5,17 @@
 scscale_empirical_mi(x, target, r = 10, input = c("counts", "normalized"),
   target_input = input, target_depth = 1e4, count_transform = c("log1p_cpm",
   "pearson_residual", "log1p"), center = TRUE, scale = FALSE,
-  eps = 1e-12, use_irlba = TRUE, store_subspaces = FALSE)
+  eps = 1e-12, use_irlba = TRUE, store_subspaces = FALSE,
+  x_rank = NULL, y_rank = NULL)
 }
 \arguments{
 \item{x}{Feature-by-cell matrix for the source modality.}
 \item{target}{Second feature-by-cell matrix or cell-level target vector.}
-\item{r}{Number of singular-vector directions to keep.}
+\item{r}{Shared number of singular-vector directions to keep. Used for both
+matrices unless \code{x_rank} or \code{y_rank} is supplied.}
+\item{x_rank, y_rank}{Optional separate ranks for the source and matrix target.
+For a vector target, \code{x_rank} controls the source rank and \code{y_rank}
+must be \code{NULL}.}
 \item{input, target_input}{Input type for \code{x} and matrix targets.}
 \item{target_depth, count_transform, center, scale}{Preprocessing controls.}
 \item{eps}{Numerical clipping value.}

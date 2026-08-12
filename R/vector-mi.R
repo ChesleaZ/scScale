@@ -89,7 +89,9 @@ scscale_empirical_mi <- function(
   scale = FALSE,
   eps = 1e-12,
   use_irlba = TRUE,
-  store_subspaces = FALSE
+  store_subspaces = FALSE,
+  x_rank = NULL,
+  y_rank = NULL
 ) {
   input <- match.arg(input)
   target_input <- match.arg(target_input)
@@ -136,22 +138,36 @@ scscale_empirical_mi <- function(
       as_dense_matrix(y)
     }
 
-    r_use <- min(as.integer(r), ncol(X) - 1L, nrow(X), nrow(Y))
-    z_X <- right_singular_vectors(X, r = r_use, use_irlba = use_irlba)
-    z_Y <- right_singular_vectors(Y, r = r_use, use_irlba = use_irlba)
+    x_rank <- if (is.null(x_rank)) r else x_rank
+    y_rank <- if (is.null(y_rank)) r else y_rank
+    if (length(x_rank) != 1L || length(y_rank) != 1L ||
+        !is.finite(x_rank) || !is.finite(y_rank) ||
+        x_rank < 1 || y_rank < 1) {
+      stop("x_rank and y_rank must be positive scalar integers.", call. = FALSE)
+    }
+    x_rank_use <- min(as.integer(x_rank), ncol(X) - 1L, nrow(X))
+    y_rank_use <- min(as.integer(y_rank), ncol(Y) - 1L, nrow(Y))
+    z_X <- right_singular_vectors(X, r = x_rank_use, use_irlba = use_irlba)
+    z_Y <- right_singular_vectors(Y, r = y_rank_use, use_irlba = use_irlba)
     out <- subspace_overlap_mi(z_X, z_Y, eps = eps)
     out$I_empirical <- out$mi
     out$target_type <- "matrix"
     out$n <- ncol(X)
     out$p_X <- nrow(X)
     out$p_Y <- nrow(Y)
-    out$r <- r_use
+    out$r <- min(x_rank_use, y_rank_use)
+    out$x_rank <- x_rank_use
+    out$y_rank <- y_rank_use
     out$cells <- common_cells
     if (isTRUE(store_subspaces)) {
       out$z_X <- z_X
       out$z_Y <- z_Y
     }
   } else {
+    if (!is.null(y_rank)) {
+      stop("y_rank is only defined when target is a matrix.", call. = FALSE)
+    }
+    x_rank <- if (is.null(x_rank)) r else x_rank
     target <- align_vector_to_cells(target, colnames(x), "target")
     X <- if (input == "counts") {
       scscale_normalize_counts(
@@ -164,11 +180,13 @@ scscale_empirical_mi <- function(
     } else {
       as_dense_matrix(x)
     }
-    out <- empirical_mi(X, target, r = r, eps = eps, use_irlba = use_irlba)
+    out <- empirical_mi(X, target, r = x_rank, eps = eps, use_irlba = use_irlba)
     out$I_empirical <- out$mi
     out$n <- ncol(X)
     out$p_X <- nrow(X)
-    out$r <- min(as.integer(r), out$r_eff)
+    out$r <- min(as.integer(x_rank), out$r_eff)
+    out$x_rank <- out$r
+    out$y_rank <- out$r_eff
     out$cells <- colnames(X)
     if (!isTRUE(store_subspaces)) {
       out$zhat <- NULL

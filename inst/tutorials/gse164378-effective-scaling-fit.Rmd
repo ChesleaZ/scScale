@@ -1,0 +1,290 @@
+---
+title: "UMI-Anchored Effective Scaling With GSE164378"
+output: html_document
+---
+
+This tutorial fits the five-parameter effective model to RNA--ADT mutual
+information measured across UMI depths. One additional parameter, \(B_0\),
+then calibrates the cell-number response around the known reference point.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+library(scScale)
+data(gse164378_3p_citeseq_hvg)
+
+X <- gse164378_3p_citeseq_hvg$rna_counts
+Y <- gse164378_3p_citeseq_hvg$adt_counts
+n_reference <- ncol(X)
+U_reference <- median(colSums(X))
+effective_dimension <- nrow(X)
+mi_rank <- 12
+rates <- c(0.10, 0.20, 0.35, 0.50, 0.70, 0.85, 1.00)
+cell_grid <- c(500, 1000, 2000, 3000, 4000)
+n_workers <- 2L
+```
+
+## Empirical UMI calibration
+
+At every UMI depth, empirical MI is calculated with all 4,000 cells and fixed
+rank-12 RNA and ADT subspaces. The effective aspect ratio uses the 2,000-feature
+RNA input dimension, \(d=2000\), rather than the retained MI rank.
+
+```{r empirical-umi, results='hide'}
+umi_observed <- scscale_empirical_inu_grid(
+  X,
+  Y,
+  n_grid = n_reference,
+  sampling_rates = rates,
+  r = mi_rank,
+  n_replicates = 3,
+  n_workers = n_workers,
+  seed = 164378
+)
+```
+
+## Fit the effective model
+
+The five fitted parameters are
+\[
+(I_\infty,C,\theta_Y,a,b).
+\]
+The nonlinear optimizer varies only \((\theta_Y,a,b)\). For each optimizer
+evaluation, \((I_\infty,C)\) are solved by constrained weighted least squares.
+The latent signal remains linear, \(q_{\rm lin}(U)=a+bU\). Before applying the
+RMT recoverability formula, a shifted softplus keeps the effective signal
+strictly above the boundary:
+\[
+q_0(n)=\sqrt{d/n},
+\]
+\[
+q(n,U)=q_0(n)+q_0(n)\log\!\left[1+\exp\!\left(
+\frac{q_{\rm lin}(U)-q_0(n)}{q_0(n)}\right)\right],
+\]
+\[
+\theta_X(n,U)=\frac{q(n,U)^2-d/n}{q(n,U)[q(n,U)+1]}.
+\]
+The floor is monotone, introduces no fitted parameter, approaches
+\(\sqrt{d/n}\) for weak latent signal, and becomes linear for strong signal.
+
+```{r fit-effective-model}
+fit <- scscale_effective_fit(
+  umi_observed,
+  d = effective_dimension,
+  n_reference = n_reference,
+  U_reference = U_reference,
+  weighting = "inverse_variance",
+  n_starts = 10,
+  seed = 164378
+)
+
+If the observed UMI range does not identify saturation, the default constraint
+\(I_\infty\le 2\max I_{\rm empirical}\) prevents an arbitrary extrapolated
+ceiling. Such a fit emits a warning and stores
+`I_infinity_identified = FALSE`; its observed-range curve remains usable.
+
+data.frame(
+  parameter = names(fit$coefficients),
+  estimate = unname(fit$coefficients),
+  row.names = NULL
+)
+```
+
+## Calibrate cell-number scaling
+
+```{r empirical-cell-validation, results='hide'}
+cell_observed <- scscale_empirical_inu_grid(
+  X,
+  Y,
+  n_grid = cell_grid,
+  sampling_rates = 1,
+  r = mi_rank,
+  n_replicates = 3,
+  n_workers = n_workers,
+  seed = 264378
+)
+fit_gamma <- scscale_effective_cell_calibrate(
+  fit,
+  cell_observed,
+  weighting = "equal"
+)
+fit <- scscale_effective_cell_calibrate_B(
+  fit,
+  cell_observed,
+  weighting = "equal"
+)
+
+summarize_mi <- function(data, x) {
+  split_data <- split(data$I_empirical, data[[x]])
+  data.frame(
+    x = as.numeric(names(split_data)),
+    I_mean = vapply(split_data, mean, numeric(1)),
+    I_sd = vapply(split_data, sd, numeric(1))
+  )
+}
+
+umi_points <- summarize_mi(umi_observed, "U")
+cell_points <- summarize_mi(cell_observed, "n")
+
+umi_curve <- predict(
+  fit,
+  n = n_reference,
+  U = seq(min(umi_points$x), U_reference, length.out = 300),
+  type = "all"
+)
+cell_curve <- predict(
+  fit,
+  n = seq(min(cell_grid), max(cell_grid), length.out = 300),
+  U = U_reference,
+  type = "all"
+)
+
+```
+
+The reference count \(n_0=4000\) is fixed by the UMI experiment, not fitted.
+The cell-number data estimate one direct scale, \(B_0\), at the reference UMI
+depth \(U_0\). The original theoretical scale is
+\[
+A_n(U)=
+\frac{\theta_Yd}
+{q(U)\{q(U)+1\}\{1-\theta_Yq(U)/(q(U)+1)\}},
+\]
+and its relative UMI dependence transfers the fitted scale:
+\[
+B(U)=B_0\frac{A_n(U)}{A_n(U_0)}.
+\]
+Let \(I_0(U)\) be the UMI-fit prediction at \(n_0\), translated by the single
+empirical anchor at \((n_0,U_0)\). The cell-number prediction is
+\[
+I_B(n,U)=I_0(U)+C
+\log\left\{
+\frac{1+B(U)/n_0}{1+B(U)/n}
+\right\}.
+\]
+All five UMI-fit parameters remain fixed. Only \(B_0\) is estimated from
+cell-number observations. Because only the ratio \(A_n(U)/A_n(U_0)\) is used,
+the arbitrary absolute scale of \(q(U)\) does not enter the cell calibration.
+No BBP indicator or additional gate is applied to this correction.
+
+```{r cell-calibration-summary}
+data.frame(
+  parameter = "B_reference",
+  estimate = unname(fit$coefficients[["B_reference"]]),
+  anchor_n0 = fit$n_reference,
+  anchor_I0 = fit$cell_anchor$I_empirical,
+  theoretical_anchor = fit$cell_anchor$I_model,
+  anchor_offset = fit$cell_anchor$offset,
+  row.names = NULL
+)
+```
+
+```{r scaling-curves, fig.width=10, fig.height=4.2, fig.cap="Solid lines are effective-model fits. Points and error bars are empirical MI means and standard deviations.", echo=FALSE}
+plot_panel <- function(curve_x, curve_y, points, xlab, title) {
+  ylim <- range(
+    curve_y,
+    points$I_mean - points$I_sd,
+    points$I_mean + points$I_sd,
+    finite = TRUE
+  )
+  plot(
+    curve_x,
+    curve_y,
+    type = "l",
+    lwd = 2,
+    col = "#0072B2",
+    xlab = xlab,
+    ylab = "RNA-ADT empirical MI",
+    main = title,
+    ylim = ylim
+  )
+  segments(
+    points$x,
+    points$I_mean - points$I_sd,
+    points$x,
+    points$I_mean + points$I_sd,
+    col = "grey55"
+  )
+  points(points$x, points$I_mean, pch = 16, col = "#222222")
+}
+
+old_par <- par(mfrow = c(1, 2), mar = c(4.2, 4.4, 2.3, 0.8))
+plot_panel(
+  umi_curve$U,
+  umi_curve$I_fitted,
+  umi_points,
+  "Median RNA UMI per cell",
+  "UMI scaling"
+)
+plot_panel(
+  cell_curve$n,
+  cell_curve$I_fitted,
+  cell_points,
+  "Cell number",
+  "Cell-number scaling"
+)
+par(old_par)
+```
+
+```{r validation-summary}
+data.frame(
+  cell_model = c("Previous gamma calibration", "Direct B0 calibration"),
+  parameter = c("gamma", "B_reference"),
+  estimate = c(
+    unname(fit_gamma$coefficients[["gamma"]]),
+    unname(fit$coefficients[["B_reference"]])
+  ),
+  UMI_fit_RMSE = fit$metrics$rmse,
+  cell_fit_RMSE = c(fit_gamma$cell_metrics$rmse, fit$cell_metrics$rmse)
+)
+```
+
+## Joint cell-number and UMI scaling
+
+The fitted model directly defines \(I(n,U)\). The curves below vary cell number
+at five observed UMI depths; no additional parameters are fitted.
+
+```{r joint-scaling, fig.width=9, fig.height=5.2, fig.cap="Predicted cell-number scaling at five observed median RNA UMI depths.", echo=FALSE}
+joint_n <- seq(min(cell_grid), max(cell_grid), length.out = 300)
+joint_indices <- unique(round(seq(1, nrow(umi_points), length.out = 5)))
+joint_U <- umi_points$x[joint_indices]
+joint_colors <- hcl.colors(length(joint_U), "Dark 3")
+
+joint_curves <- lapply(joint_U, function(U_level) {
+  predict(fit, n = joint_n, U = U_level, type = "all")
+})
+joint_ylim <- range(vapply(
+  joint_curves,
+  function(curve) range(curve$I_fitted),
+  numeric(2)
+))
+
+old_par <- par(mar = c(5.1, 4.5, 4.1, 8), xpd = NA)
+plot(
+  joint_curves[[1]]$n,
+  joint_curves[[1]]$I_fitted,
+  type = "l",
+  lwd = 2,
+  col = joint_colors[[1]],
+  xlab = "Cell number",
+  ylab = expression(I(n, U)),
+  main = "Joint cell-number and UMI scaling",
+  ylim = joint_ylim
+)
+for (i in seq_along(joint_curves)[-1]) {
+  lines(
+    joint_curves[[i]]$n,
+    joint_curves[[i]]$I_fitted,
+    lwd = 2,
+    col = joint_colors[[i]]
+  )
+}
+legend(
+  "right",
+  inset = c(-0.25, 0),
+  legend = format(round(joint_U), big.mark = ","),
+  title = "Median UMI/cell",
+  col = joint_colors,
+  lwd = 2,
+  bty = "n"
+)
+par(old_par)
+```

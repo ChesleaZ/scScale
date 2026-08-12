@@ -10,7 +10,7 @@ scscale_empirical_inu_grid(x, target, n_grid = NULL,
   input = c("counts", "normalized"), target_input = input,
   target_depth = 1e4, count_transform = c("log1p_cpm",
   "pearson_residual", "log1p"), center = TRUE, scale = FALSE,
-  eps = 1e-12, use_irlba = TRUE)
+  eps = 1e-12, use_irlba = TRUE, x_rank = NULL, y_rank = NULL)
 }
 \arguments{
 \item{x}{Feature-by-cell source matrix.}
@@ -23,7 +23,9 @@ scscale_empirical_inu_grid(x, target, n_grid = NULL,
 \code{sampling_rates}. If \code{U_grid} is supplied and \code{sampling_rates}
 is omitted, the default sampling-rate grid is ignored.}
 \item{sampling_rates}{Count downsampling fractions in \code{(0,1]}.}
-\item{r}{Fixed rank used for empirical subspace MI.}
+\item{r}{Shared fixed rank used for empirical subspace MI unless separate
+source and target ranks are supplied.}
+\item{x_rank, y_rank}{Optional separate source and matrix-target ranks.}
 \item{n_replicates}{Number of replicate subsamples per grid point.}
 \item{n_workers}{Number of parallel workers for empirical grid evaluation.
 The default \code{1} evaluates sequentially.}
